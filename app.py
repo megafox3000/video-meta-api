@@ -93,3 +93,50 @@ def reverse_geocode(lat, lon):
 
 if __name__ == '__main__':
     app.run(debug=True)
+
+from flask import Flask, request, jsonify, send_from_directory
+import os
+import json
+from datetime import datetime
+
+app = Flask(__name__)
+
+# 👇 Новый маршрут для проверки
+@app.route('/')
+def index():
+    return jsonify({"status": "✅ API is up and running!"})
+
+@app.route('/analyze', methods=['POST'])
+def analyze_video():
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file uploaded'}), 400
+
+    file = request.files['file']
+    filename = file.filename
+    filepath = os.path.join("uploads", filename)
+    os.makedirs("uploads", exist_ok=True)
+    file.save(filepath)
+
+    # эмуляция анализа (можно вставить реальный анализ тут)
+    result = {
+        "filename": filename,
+        "size_bytes": os.path.getsize(filepath),
+        "analyzed_at": datetime.now().isoformat(),
+    }
+
+    os.makedirs("output", exist_ok=True)
+    json_path = os.path.join("output", f"{datetime.now().strftime('%Y%m%d-%H%M%S')}.json")
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(result, f, ensure_ascii=False, indent=2)
+
+    result["json_url"] = f"/download/{os.path.basename(json_path)}"
+    return jsonify(result)
+
+@app.route('/download/<filename>')
+def download_file(filename):
+    return send_from_directory("output", filename, as_attachment=True)
+
+if __name__ == '__main__':
+    from waitress import serve
+    serve(app, host='0.0.0.0', port=8080)
+
