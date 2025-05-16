@@ -10,6 +10,8 @@ from datetime import datetime
 
 app = Flask(__name__)
 
+CORS(app)  # 👈 Включает CORS для всех маршрутов
+
 # ----------- GPS & METADATA FUNCTIONS -----------
 
 def parse_gps_tags(tags):
