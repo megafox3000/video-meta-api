@@ -6,9 +6,11 @@ import os
 import requests
 import re
 import time
+from flask_cors import CORS
 from datetime import datetime
 
 app = Flask(__name__)
+CORS(app)
 # ----------- GPS & METADATA FUNCTIONS -----------
 
 def parse_gps_tags(tags):
