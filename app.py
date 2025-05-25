@@ -11,6 +11,7 @@ from datetime import datetime
 
 app = Flask(__name__)
 CORS(app)
+
 # ----------- GPS & METADATA FUNCTIONS -----------
 
 def parse_gps_tags(tags):
@@ -32,8 +33,8 @@ def extract_coordinates_from_tags(tags):
                 address = reverse_geocode(lat, lon)
                 gps_data.append({
                     "tag": key,
-                    "lat": lat,
-                    "lon": lon,
+                    "latitude": float(lat),
+                    "longitude": float(lon),
                     "link": link,
                     "address": address
                 })
@@ -41,7 +42,7 @@ def extract_coordinates_from_tags(tags):
 
 def reverse_geocode(lat, lon):
     try:
-        time.sleep(1)  # чтобы не попасть под лимиты Nominatim
+        time.sleep(1)
         url = "https://nominatim.openstreetmap.org/reverse"
         params = {
             "lat": lat,
