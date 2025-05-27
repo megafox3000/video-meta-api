@@ -3,4 +3,5 @@ requests
 gunicorn
 waitress
 flask-cors
+cloudinary
 
