@@ -1,19 +1,44 @@
-from flask import Flask, request, jsonify, send_from_directory
-import subprocess
-import json
-import tempfile
 import os
-import requests
-import re
-import time
+from flask import Flask, request, jsonify, send_from_directory
+# subprocess, json, tempfile, re больше не нужны для ffprobe/локального сохранения
+# import subprocess
+# import json
+# import tempfile
+# import re
+import time # Оставим для potential reverse_geocode, но пока не используется
+import requests # Оставим для reverse_geocode, но пока не используется
 from flask_cors import CORS
 from datetime import datetime
+
+# --- ИМПОРТЫ CLOUDINARY ---
+import cloudinary
+import cloudinary.uploader
+import cloudinary.api
 
 app = Flask(__name__)
 CORS(app)
 
-# ----------- GPS & METADATA FUNCTIONS -----------
+# --- Настройка Cloudinary ---
+# ВАЖНО: Получите ваши Cloudinary API ключи из дашборда Cloudinary
+# и установите их как переменные окружения на Render!
+# (CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET)
+cloudinary.config(
+    cloud_name = os.environ.get('CLOUDINARY_CLOUD_NAME'),
+    api_key = os.environ.get('CLOUDINARY_API_KEY'),
+    api_secret = os.environ.get('CLOUDINARY_API_SECRET'),
+    secure = True
+)
 
+# --- Имитация базы данных задач в памяти (Python dict) ---
+# { public_id: { username, status, filename, cloudinary_url, metadata, message, timestamp } }
+# В реальном приложении здесь должна быть настоящая база данных (PostgreSQL, SQLite и т.д.)
+fake_task_database = {}
+
+# ----------- GPS & METADATA FUNCTIONS (Оставлены как есть, но НЕ будут использоваться Cloudinary-потоком) -----------
+# Если вы планируете продолжать использовать эти функции для анализа, который Cloudinary не предоставляет,
+# вам нужно будет решить, как передавать видео сюда (например, скачивать с Cloudinary на Render или
+# использовать эти функции на локальном воркере).
+# В текущей версии для Cloudinary анализа, эти функции не вызываются.
 def parse_gps_tags(tags):
     gps_data = {}
     for key, value in tags.items():
@@ -23,13 +48,16 @@ def parse_gps_tags(tags):
 
 def extract_coordinates_from_tags(tags):
     gps_data = []
+    # Для этого требуется 're' - убедитесь, что он импортирован
+    import re
     for key, value in tags.items():
         if "ISO6709" in key and re.match(r"^[\+\-]\d+(\.\d+)?[\+\-]\d+(\.\d+)?", value):
             match = re.match(r"^([\+\-]\d+(\.\d+)?)([\+\-]\d+(\.\d+)?).*", value)
             if match:
                 lat = match.group(1)
                 lon = match.group(3)
-                link = f"https://maps.google.com/?q={lat},{lon}"
+                # Измененная ссылка, чтобы соответствовать формату URL, который не приводит к ошибке в браузере
+                link = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
                 address = reverse_geocode(lat, lon)
                 gps_data.append({
                     "tag": key,
@@ -42,7 +70,7 @@ def extract_coordinates_from_tags(tags):
 
 def reverse_geocode(lat, lon):
     try:
-        time.sleep(1)
+        # time.sleep(1) # Оставим, если вы знаете, зачем это
         url = "https://nominatim.openstreetmap.org/reverse"
         params = {
             "lat": lat,
@@ -58,78 +86,114 @@ def reverse_geocode(lat, lon):
     except Exception as e:
         return f"Ошибка геокодинга: {e}"
 
-# ----------- ANALYZE LOGIC -----------
-
-def get_video_metadata(file_path):
-    cmd = [
-        'ffprobe', '-v', 'quiet', '-print_format', 'json',
-        '-show_format', '-show_streams', file_path
-    ]
-    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-
-    if result.returncode != 0:
-        raise Exception("Ошибка при запуске ffprobe")
-
-    info = json.loads(result.stdout)
-
-    output = {
-        "file_name": os.path.basename(file_path),
-        "format": info.get('format', {}),
-        "streams": info.get('streams', []),
-        "gps": []
-    }
-
-    tags = info.get('format', {}).get('tags', {})
-    gps_tags = parse_gps_tags(tags)
-    gps_info = extract_coordinates_from_tags(gps_tags)
-    output["gps"] = gps_info
-
-    return output
-
 # ----------- FLASK ROUTES -----------
 
 @app.route('/')
 def index():
-    return jsonify({"status": "✅ API is up and running!"})
+    return jsonify({"status": "✅ Python Backend is up and running!"})
 
 @app.route('/analyze', methods=['POST'])
 def analyze_video():
     if 'file' not in request.files:
         return jsonify({'error': 'No file uploaded'}), 400
-
+    
     file = request.files['file']
-    filename = file.filename
-    os.makedirs("uploads", exist_ok=True)
-    filepath = os.path.join("uploads", filename)
-    file.save(filepath)
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+
+    username = request.form.get('username', 'unknown_user') # Получаем имя пользователя из формы
+
+    print(f"\n[PYTHON BACKEND] Получен файл '{file.filename}' от пользователя '{username}' на /analyze.")
 
     try:
-        metadata = get_video_metadata(filepath)
+        # --- Загрузка видео на Cloudinary ---
+        # Cloudinary обработает видео и предоставит метаданные
+        upload_result = cloudinary.uploader.upload(
+            file,
+            resource_type="video",
+            folder="hife_video_analysis", # Папка на вашем аккаунте Cloudinary
+            overwrite=True, # Перезаписывать, если файл с таким именем уже существует (может быть полезно для отладки)
+            quality="auto", # Оптимизация качества
+            format="mp4", # Конвертация в mp4 (или оставьте original)
+            raw_convert="all" # Запросить полную информацию, включая FFprobe метаданные
+        )
+
+        public_id = upload_result.get('public_id')
+        cloudinary_url = upload_result.get('secure_url')
+        
+        # Получаем базовые метаданные из ответа Cloudinary
+        basic_metadata = {
+            "format": upload_result.get('format'),
+            "duration": upload_result.get('duration'), # в секундах
+            "width": upload_result.get('width'),
+            "height": upload_result.get('height'),
+            "size_bytes": upload_result.get('bytes'), # в байтах
+            "bit_rate": upload_result.get('bit_rate') # Cloudinary может предоставить это напрямую
+        }
+        
+        # Cloudinary может также возвращать GPS данные, если они есть в видео:
+        # Пример: if 'image_metadata' in upload_result and 'GPS' in upload_result['image_metadata']:
+        # Если нужен более глубокий FFprobe, можно запросить через cloudinary.api.resource
+        # info = cloudinary.api.resource(public_id, all=True, type="upload")
+        # print(info) # Здесь будут все детали, включая streaming_profile, metadata, etc.
+        # basic_metadata['some_other_field'] = info.get('some_other_field')
+
+        task_status = "completed" # Для Cloudinary-анализа, статус обычно "completed" сразу после загрузки
+        task_message = "Видео успешно загружено на Cloudinary и получены базовые метаданные."
+
+        # Сохраняем информацию о задаче в нашей "фиктивной базе данных"
+        fake_task_database[public_id] = {
+            "username": username,
+            "status": task_status,
+            "filename": file.filename,
+            "cloudinary_url": cloudinary_url,
+            "metadata": basic_metadata,
+            "message": task_message,
+            "timestamp": datetime.now().isoformat()
+        }
+
+        print(f"[PYTHON BACKEND] Видео '{file.filename}' загружено на Cloudinary. Public ID: {public_id}")
+        return jsonify({
+            "status": "task_created",
+            "taskId": public_id, # Используем public_id как taskId
+            "message": task_message,
+            "cloudinary_url": cloudinary_url, # Отправляем Cloudinary URL фронтенду
+            "metadata": basic_metadata # Отправляем базовые метаданные сразу
+        }), 200
+
+    except cloudinary.exceptions.Error as e:
+        print(f"[PYTHON BACKEND] Cloudinary Error: {e}")
+        return jsonify({"error": f"Cloudinary upload failed: {str(e)}"}), 500
     except Exception as e:
-        return jsonify({"error": f"Metadata extraction failed: {e}"}), 500
+        print(f"[PYTHON BACKEND] Общая ошибка: {e}")
+        return jsonify({"error": f"Internal server error: {str(e)}"}), 500
 
-    result = {
-        "filename": filename,
-        "size_bytes": os.path.getsize(filepath),
-        "analyzed_at": datetime.now().isoformat(),
-        "metadata": metadata
-    }
+# --- НОВЫЙ Эндпоинт для проверки статуса задачи ---
+@app.route('/task-status/<task_id>', methods=['GET'])
+def get_task_status(task_id):
+    task_info = fake_task_database.get(task_id)
+    if task_info:
+        return jsonify(task_info), 200
+    else:
+        return jsonify({"message": "Task not found."}), 404
 
-    os.makedirs("output", exist_ok=True)
-    json_filename = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
-    json_path = os.path.join("output", json_filename)
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(result, f, ensure_ascii=False, indent=2)
+# --- Эндпоинт-заглушка для будущих "тяжелых" задач (для локального воркера) ---
+@app.route('/heavy-tasks/pending', methods=['GET'])
+def get_heavy_tasks():
+    # Здесь могла бы быть логика, которая фильтрует задачи,
+    # требующие локальной обработки (например, по размеру, формату, сложности анализа).
+    # Пока это просто заглушка.
+    return jsonify({"message": "No heavy tasks pending for local worker yet."}), 200
 
-    result["json_url"] = f"/download/{json_filename}"
-    return jsonify(result)
-
-@app.route('/download/<filename>')
-def download_file(filename):
-    return send_from_directory("output", filename, as_attachment=True)
+# Удален эндпоинт /download/<filename>, так как файлы не сохраняются локально.
+# @app.route('/download/<filename>')
+# def download_file(filename):
+#     return send_from_directory("output", filename, as_attachment=True)
 
 # ----------- ENTRYPOINT -----------
 
 if __name__ == '__main__':
     from waitress import serve
-    serve(app, host='0.0.0.0', port=8080)
+    # Render использует переменную окружения PORT для определения порта
+    port = int(os.environ.get('PORT', 8080)) # Использовать 8080 по умолчанию, но Render предоставит свой порт
+    serve(app, host='0.0.0.0', port=port)
