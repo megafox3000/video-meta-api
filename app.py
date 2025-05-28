@@ -115,7 +115,6 @@ def analyze_video():
             overwrite=True, # Перезаписывать, если файл с таким именем уже существует (может быть полезно для отладки)
             quality="auto", # Оптимизация качества
             format="mp4", # Конвертация в mp4 (или оставьте original)
-            raw_convert="all" # Запросить полную информацию, включая FFprobe метаданные
         )
 
         public_id = upload_result.get('public_id')
