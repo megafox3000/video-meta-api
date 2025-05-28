@@ -1,12 +1,5 @@
 import os
-from flask import Flask, request, jsonify, send_from_directory
-# subprocess, json, tempfile, re больше не нужны для ffprobe/локального сохранения
-# import subprocess
-# import json
-# import tempfile
-# import re
-import time # Оставим для potential reverse_geocode, но пока не используется
-import requests # Оставим для reverse_geocode, но пока не используется
+from flask import Flask, request, jsonify # send_from_directory больше не нужен, т.к. не сохраняем локально
 from flask_cors import CORS
 from datetime import datetime
 
@@ -15,13 +8,15 @@ import cloudinary
 import cloudinary.uploader
 import cloudinary.api
 
+# --- ИМПОРТЫ ДЛЯ POSTGRESQL ---
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, JSON
+from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy_json import mutable_json_type # Для хранения JSON в PostgreSQL
+
 app = Flask(__name__)
 CORS(app)
 
 # --- Настройка Cloudinary ---
-# ВАЖНО: Получите ваши Cloudinary API ключи из дашборда Cloudinary
-# и установите их как переменные окружения на Render!
-# (CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET)
 cloudinary.config(
     cloud_name = os.environ.get('CLOUDINARY_CLOUD_NAME'),
     api_key = os.environ.get('CLOUDINARY_API_KEY'),
@@ -29,16 +24,54 @@ cloudinary.config(
     secure = True
 )
 
-# --- Имитация базы данных задач в памяти (Python dict) ---
-# { public_id: { username, status, filename, cloudinary_url, metadata, message, timestamp } }
-# В реальном приложении здесь должна быть настоящая база данных (PostgreSQL, SQLite и т.д.)
-fake_task_database = {}
+# --- Настройка PostgreSQL ---
+# Получаем URL базы данных из переменной окружения Render
+DATABASE_URL = os.environ.get('DATABASE_URL')
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL environment variable is not set!")
 
-# ----------- GPS & METADATA FUNCTIONS (Оставлены как есть, но НЕ будут использоваться Cloudinary-потоком) -----------
-# Если вы планируете продолжать использовать эти функции для анализа, который Cloudinary не предоставляет,
-# вам нужно будет решить, как передавать видео сюда (например, скачивать с Cloudinary на Render или
-# использовать эти функции на локальном воркере).
-# В текущей версии для Cloudinary анализа, эти функции не вызываются.
+engine = create_engine(DATABASE_URL)
+Session = sessionmaker(bind=engine)
+Base = declarative_base()
+
+# --- Определение модели данных для задач ---
+class Task(Base):
+    __tablename__ = 'tasks' # Имя таблицы в базе данных
+
+    id = Column(Integer, primary_key=True) # Автоматический ID для записи
+    task_id = Column(String, unique=True, nullable=False) # Public ID от Cloudinary, будет нашим taskId
+    username = Column(String)
+    status = Column(String) # Например, 'processing', 'completed', 'failed'
+    filename = Column(String)
+    cloudinary_url = Column(String)
+    # Используем JSON тип для хранения словаря с метаданными
+    metadata = Column(JSON) 
+    message = Column(Text)
+    timestamp = Column(DateTime, default=datetime.now)
+
+    def __repr__(self):
+        return f"<Task(task_id='{self.task_id}', status='{self.status}')>"
+    
+    # Метод для преобразования объекта в словарь, который можно отправить как JSON
+    def to_dict(self):
+        return {
+            "taskId": self.task_id,
+            "username": self.username,
+            "status": self.status,
+            "filename": self.filename,
+            "cloudinary_url": self.cloudinary_url,
+            "metadata": self.metadata,
+            "message": self.message,
+            "timestamp": self.timestamp.isoformat()
+        }
+
+# Функция для создания таблиц в базе данных
+def create_tables():
+    Base.metadata.create_all(engine)
+    print("Database tables created or already exist.")
+
+# ----------- GPS & METADATA FUNCTIONS (Неизменны, но не используются Cloudinary-потоком) -----------
+# Оставил их, как в вашем исходном коде, но они не будут вызываться при обработке через Cloudinary.
 def parse_gps_tags(tags):
     gps_data = {}
     for key, value in tags.items():
@@ -48,7 +81,6 @@ def parse_gps_tags(tags):
 
 def extract_coordinates_from_tags(tags):
     gps_data = []
-    # Для этого требуется 're' - убедитесь, что он импортирован
     import re
     for key, value in tags.items():
         if "ISO6709" in key and re.match(r"^[\+\-]\d+(\.\d+)?[\+\-]\d+(\.\d+)?", value):
@@ -56,7 +88,6 @@ def extract_coordinates_from_tags(tags):
             if match:
                 lat = match.group(1)
                 lon = match.group(3)
-                # Измененная ссылка, чтобы соответствовать формату URL, который не приводит к ошибке в браузере
                 link = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
                 address = reverse_geocode(lat, lon)
                 gps_data.append({
@@ -70,7 +101,6 @@ def extract_coordinates_from_tags(tags):
 
 def reverse_geocode(lat, lon):
     try:
-        # time.sleep(1) # Оставим, если вы знаете, зачем это
         url = "https://nominatim.openstreetmap.org/reverse"
         params = {
             "lat": lat,
@@ -101,63 +131,58 @@ def analyze_video():
     if file.filename == '':
         return jsonify({"error": "No selected file"}), 400
 
-    username = request.form.get('username', 'unknown_user') # Получаем имя пользователя из формы
+    username = request.form.get('username', 'unknown_user')
 
     print(f"\n[PYTHON BACKEND] Получен файл '{file.filename}' от пользователя '{username}' на /analyze.")
 
     try:
         # --- Загрузка видео на Cloudinary ---
-        # Cloudinary обработает видео и предоставит метаданные
         upload_result = cloudinary.uploader.upload(
             file,
             resource_type="video",
-            folder="hife_video_analysis", # Папка на вашем аккаунте Cloudinary
-            overwrite=True, # Перезаписывать, если файл с таким именем уже существует (может быть полезно для отладки)
-            quality="auto", # Оптимизация качества
-            format="mp4", # Конвертация в mp4 (или оставьте original)
+            folder="hife_video_analysis",
+            overwrite=True,
+            quality="auto",
+            format="mp4"
         )
 
         public_id = upload_result.get('public_id')
         cloudinary_url = upload_result.get('secure_url')
         
-        # Получаем базовые метаданные из ответа Cloudinary
         basic_metadata = {
             "format": upload_result.get('format'),
-            "duration": upload_result.get('duration'), # в секундах
+            "duration": upload_result.get('duration'),
             "width": upload_result.get('width'),
             "height": upload_result.get('height'),
-            "size_bytes": upload_result.get('bytes'), # в байтах
-            "bit_rate": upload_result.get('bit_rate') # Cloudinary может предоставить это напрямую
+            "size_bytes": upload_result.get('bytes'),
+            "bit_rate": upload_result.get('bit_rate')
         }
         
-        # Cloudinary может также возвращать GPS данные, если они есть в видео:
-        # Пример: if 'image_metadata' in upload_result and 'GPS' in upload_result['image_metadata']:
-        # Если нужен более глубокий FFprobe, можно запросить через cloudinary.api.resource
-        # info = cloudinary.api.resource(public_id, all=True, type="upload")
-        # print(info) # Здесь будут все детали, включая streaming_profile, metadata, etc.
-        # basic_metadata['some_other_field'] = info.get('some_other_field')
-
-        task_status = "completed" # Для Cloudinary-анализа, статус обычно "completed" сразу после загрузки
+        task_status = "completed"
         task_message = "Видео успешно загружено на Cloudinary и получены базовые метаданные."
 
-        # Сохраняем информацию о задаче в нашей "фиктивной базе данных"
-        fake_task_database[public_id] = {
-            "username": username,
-            "status": task_status,
-            "filename": file.filename,
-            "cloudinary_url": cloudinary_url,
-            "metadata": basic_metadata,
-            "message": task_message,
-            "timestamp": datetime.now().isoformat()
-        }
+        # --- Сохранение задачи в PostgreSQL ---
+        with Session() as session:
+            new_task = Task(
+                task_id=public_id,
+                username=username,
+                status=task_status,
+                filename=file.filename,
+                cloudinary_url=cloudinary_url,
+                metadata=basic_metadata, # SQLAlchemy_JSON позволяет хранить словарь
+                message=task_message
+            )
+            session.add(new_task)
+            session.commit()
+            print(f"[PYTHON BACKEND] Задача '{public_id}' сохранена в БД.")
 
         print(f"[PYTHON BACKEND] Видео '{file.filename}' загружено на Cloudinary. Public ID: {public_id}")
         return jsonify({
             "status": "task_created",
-            "taskId": public_id, # Используем public_id как taskId
+            "taskId": public_id,
             "message": task_message,
-            "cloudinary_url": cloudinary_url, # Отправляем Cloudinary URL фронтенду
-            "metadata": basic_metadata # Отправляем базовые метаданные сразу
+            "cloudinary_url": cloudinary_url,
+            "metadata": basic_metadata
         }), 200
 
     except cloudinary.exceptions.Error as e:
@@ -165,34 +190,30 @@ def analyze_video():
         return jsonify({"error": f"Cloudinary upload failed: {str(e)}"}), 500
     except Exception as e:
         print(f"[PYTHON BACKEND] Общая ошибка: {e}")
+        # Если есть активная сессия, откатываем изменения в случае ошибки
+        with Session() as session:
+            session.rollback()
         return jsonify({"error": f"Internal server error: {str(e)}"}), 500
 
-# --- НОВЫЙ Эндпоинт для проверки статуса задачи ---
+# --- Эндпоинт для проверки статуса задачи ---
 @app.route('/task-status/<task_id>', methods=['GET'])
 def get_task_status(task_id):
-    task_info = fake_task_database.get(task_id)
-    if task_info:
-        return jsonify(task_info), 200
-    else:
-        return jsonify({"message": "Task not found."}), 404
+    with Session() as session:
+        task_info = session.query(Task).filter_by(task_id=task_id).first()
+        if task_info:
+            return jsonify(task_info.to_dict()), 200 # Возвращаем данные задачи из БД
+        else:
+            return jsonify({"message": "Task not found."}), 404
 
 # --- Эндпоинт-заглушка для будущих "тяжелых" задач (для локального воркера) ---
 @app.route('/heavy-tasks/pending', methods=['GET'])
 def get_heavy_tasks():
-    # Здесь могла бы быть логика, которая фильтрует задачи,
-    # требующие локальной обработки (например, по размеру, формату, сложности анализа).
-    # Пока это просто заглушка.
     return jsonify({"message": "No heavy tasks pending for local worker yet."}), 200
 
-# Удален эндпоинт /download/<filename>, так как файлы не сохраняются локально.
-# @app.route('/download/<filename>')
-# def download_file(filename):
-#     return send_from_directory("output", filename, as_attachment=True)
-
 # ----------- ENTRYPOINT -----------
-
 if __name__ == '__main__':
+    # При запуске приложения, создаем таблицы (если их нет)
+    create_tables() 
     from waitress import serve
-    # Render использует переменную окружения PORT для определения порта
-    port = int(os.environ.get('PORT', 8080)) # Использовать 8080 по умолчанию, но Render предоставит свой порт
+    port = int(os.environ.get('PORT', 8080))
     serve(app, host='0.0.0.0', port=port)
