@@ -9,7 +9,6 @@ import cloudinary.api
 
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, JSON
 from sqlalchemy.orm import sessionmaker, declarative_base
-# import sqlalchemy_json # Этот импорт не нужен, если вы используете Column(JSON) напрямую с SQLAlchemy 1.4+ и Psycopg2
 
 app = Flask(__name__)
 CORS(app)
@@ -38,7 +37,6 @@ class Task(Base):
     status = Column(String)
     filename = Column(String)
     cloudinary_url = Column(String)
-    # ИЗМЕНЕНО: переименовали 'metadata' в 'video_metadata'
     video_metadata = Column(JSON) 
     message = Column(Text)
     timestamp = Column(DateTime, default=datetime.now)
@@ -53,17 +51,22 @@ class Task(Base):
             "status": self.status,
             "filename": self.filename,
             "cloudinary_url": self.cloudinary_url,
-            # ИЗМЕНЕНО: теперь возвращаем 'video_metadata'
             "metadata": self.video_metadata, 
             "message": self.message,
             "timestamp": self.timestamp.isoformat()
         }
 
 def create_tables():
+    # Эта функция создает таблицы, только если их еще нет в базе данных
     Base.metadata.create_all(engine)
     print("Database tables created or already exist.")
 
-# (Остальной код функций GPS и метаданных без изменений)
+# --- ВЫЗОВ create_tables() ПЕРЕМЕЩЕН СЮДА ---
+# Теперь эта функция будет вызываться при импорте модуля 'app',
+# то есть при запуске Flask-приложения Gunicorn'ом/Waitress'ом.
+create_tables()
+
+# ----------- GPS & METADATA FUNCTIONS (без изменений) -----------
 def parse_gps_tags(tags):
     gps_data = {}
     for key, value in tags.items():
@@ -157,7 +160,6 @@ def analyze_video():
                 status=task_status,
                 filename=file.filename,
                 cloudinary_url=cloudinary_url,
-                # ИЗМЕНЕНО: теперь сохраняем в 'video_metadata'
                 video_metadata=basic_metadata, 
                 message=task_message
             )
@@ -171,13 +173,13 @@ def analyze_video():
             "taskId": public_id,
             "message": task_message,
             "cloudinary_url": cloudinary_url,
-            "metadata": basic_metadata # Здесь можно оставить 'metadata' для фронтенда
+            "metadata": basic_metadata
         }), 200
 
     except cloudinary.exceptions.Error as e:
         print(f"[PYTHON BACKEND] Cloudinary Error: {e}")
         with Session() as session:
-            session.rollback() # Откатываем изменения в случае ошибки
+            session.rollback()
         return jsonify({"error": f"Cloudinary upload failed: {str(e)}"}), 500
     except Exception as e:
         print(f"[PYTHON BACKEND] Общая ошибка: {e}")
@@ -199,7 +201,8 @@ def get_heavy_tasks():
     return jsonify({"message": "No heavy tasks pending for local worker yet."}), 200
 
 if __name__ == '__main__':
-    create_tables() 
+    # ЭТОТ БЛОК НЕ ВЫПОЛНЯЕТСЯ НА RENDER ПРИ ЗАПУСКЕ GUNICORN/WAITRESS
+    # create_tables() # УДАЛЕНО ОТСЮДА
     from waitress import serve
     port = int(os.environ.get('PORT', 8080))
     serve(app, host='0.0.0.0', port=port)
