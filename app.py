@@ -113,6 +113,8 @@ def reverse_geocode(lat, lon):
 
 @app.route('/')
 def index():
+    # ВРЕМЕННАЯ СТРОКА ДЛЯ ДИАГНОСТИКИ:
+    print("[PYTHON BACKEND] Корневой путь '/' был запрошен. Проверяем вывод print.")
     return jsonify({"status": "✅ Python Backend is up and running!"})
 
 @app.route('/analyze', methods=['POST'])
@@ -189,20 +191,15 @@ def analyze_video():
 
 @app.route('/task-status/<task_id>', methods=['GET'])
 def get_task_status(task_id):
-    # НОВАЯ СТРОКА ДЛЯ ДИАГНОСТИКИ:
+    # ... (ВАШИ СУЩЕСТВУЮЩИЕ ДИАГНОСТИЧЕСКИЕ print-Ы ЗДЕСЬ) ...
     print(f"\n[PYTHON BACKEND] Получен запрос статуса для task_id: '{task_id}'")
-    
     with Session() as session:
-        # НОВАЯ СТРОКА ДЛЯ ДИАГНОСТИКИ:
         print(f"[PYTHON BACKEND] Поиск задачи в БД с task_id: '{task_id}'")
         task_info = session.query(Task).filter_by(task_id=task_id).first()
-        
         if task_info:
-            # НОВАЯ СТРОКА ДЛЯ ДИАГНОСТИКИ:
             print(f"[PYTHON BACKEND] Задача найдена в БД: {task_info.task_id}, статус: {task_info.status}")
             return jsonify(task_info.to_dict()), 200
         else:
-            # НОВАЯ СТРОКА ДЛЯ ДИАГНОСТИКИ:
             print(f"[PYTHON BACKEND] Задача с task_id '{task_id}' НЕ НАЙДЕНА в БД.")
             return jsonify({"message": "Task not found."}), 404
 
