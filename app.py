@@ -189,7 +189,7 @@ def analyze_video():
             session.rollback()
         return jsonify({"error": f"Internal server error: {str(e)}"}), 500
 
-@app.route('/task-status/<task_id>', methods=['GET'])
+@app.route('/task-status/<path:task_id>', methods=['GET'])
 def get_task_status(task_id):
     # ... (ВАШИ СУЩЕСТВУЮЩИЕ ДИАГНОСТИЧЕСКИЕ print-Ы ЗДЕСЬ) ...
     print(f"\n[PYTHON BACKEND] Получен запрос статуса для task_id: '{task_id}'")
