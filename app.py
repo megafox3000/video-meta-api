@@ -1,22 +1,19 @@
 import os
-from flask import Flask, request, jsonify # send_from_directory больше не нужен, т.к. не сохраняем локально
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 from datetime import datetime
 
-# --- ИМПОРТЫ CLOUDINARY ---
 import cloudinary
 import cloudinary.uploader
 import cloudinary.api
 
-# --- ИМПОРТЫ ДЛЯ POSTGRESQL ---
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, JSON
 from sqlalchemy.orm import sessionmaker, declarative_base
-from sqlalchemy_json import mutable_json_type # Для хранения JSON в PostgreSQL
+# import sqlalchemy_json # Этот импорт не нужен, если вы используете Column(JSON) напрямую с SQLAlchemy 1.4+ и Psycopg2
 
 app = Flask(__name__)
 CORS(app)
 
-# --- Настройка Cloudinary ---
 cloudinary.config(
     cloud_name = os.environ.get('CLOUDINARY_CLOUD_NAME'),
     api_key = os.environ.get('CLOUDINARY_API_KEY'),
@@ -24,8 +21,6 @@ cloudinary.config(
     secure = True
 )
 
-# --- Настройка PostgreSQL ---
-# Получаем URL базы данных из переменной окружения Render
 DATABASE_URL = os.environ.get('DATABASE_URL')
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL environment variable is not set!")
@@ -34,25 +29,23 @@ engine = create_engine(DATABASE_URL)
 Session = sessionmaker(bind=engine)
 Base = declarative_base()
 
-# --- Определение модели данных для задач ---
 class Task(Base):
-    __tablename__ = 'tasks' # Имя таблицы в базе данных
+    __tablename__ = 'tasks'
 
-    id = Column(Integer, primary_key=True) # Автоматический ID для записи
-    task_id = Column(String, unique=True, nullable=False) # Public ID от Cloudinary, будет нашим taskId
+    id = Column(Integer, primary_key=True)
+    task_id = Column(String, unique=True, nullable=False)
     username = Column(String)
-    status = Column(String) # Например, 'processing', 'completed', 'failed'
+    status = Column(String)
     filename = Column(String)
     cloudinary_url = Column(String)
-    # Используем JSON тип для хранения словаря с метаданными
-    metadata = Column(JSON) 
+    # ИЗМЕНЕНО: переименовали 'metadata' в 'video_metadata'
+    video_metadata = Column(JSON) 
     message = Column(Text)
     timestamp = Column(DateTime, default=datetime.now)
 
     def __repr__(self):
         return f"<Task(task_id='{self.task_id}', status='{self.status}')>"
     
-    # Метод для преобразования объекта в словарь, который можно отправить как JSON
     def to_dict(self):
         return {
             "taskId": self.task_id,
@@ -60,18 +53,17 @@ class Task(Base):
             "status": self.status,
             "filename": self.filename,
             "cloudinary_url": self.cloudinary_url,
-            "metadata": self.metadata,
+            # ИЗМЕНЕНО: теперь возвращаем 'video_metadata'
+            "metadata": self.video_metadata, 
             "message": self.message,
             "timestamp": self.timestamp.isoformat()
         }
 
-# Функция для создания таблиц в базе данных
 def create_tables():
     Base.metadata.create_all(engine)
     print("Database tables created or already exist.")
 
-# ----------- GPS & METADATA FUNCTIONS (Неизменны, но не используются Cloudinary-потоком) -----------
-# Оставил их, как в вашем исходном коде, но они не будут вызываться при обработке через Cloudinary.
+# (Остальной код функций GPS и метаданных без изменений)
 def parse_gps_tags(tags):
     gps_data = {}
     for key, value in tags.items():
@@ -116,8 +108,6 @@ def reverse_geocode(lat, lon):
     except Exception as e:
         return f"Ошибка геокодинга: {e}"
 
-# ----------- FLASK ROUTES -----------
-
 @app.route('/')
 def index():
     return jsonify({"status": "✅ Python Backend is up and running!"})
@@ -136,7 +126,6 @@ def analyze_video():
     print(f"\n[PYTHON BACKEND] Получен файл '{file.filename}' от пользователя '{username}' на /analyze.")
 
     try:
-        # --- Загрузка видео на Cloudinary ---
         upload_result = cloudinary.uploader.upload(
             file,
             resource_type="video",
@@ -161,7 +150,6 @@ def analyze_video():
         task_status = "completed"
         task_message = "Видео успешно загружено на Cloudinary и получены базовые метаданные."
 
-        # --- Сохранение задачи в PostgreSQL ---
         with Session() as session:
             new_task = Task(
                 task_id=public_id,
@@ -169,7 +157,8 @@ def analyze_video():
                 status=task_status,
                 filename=file.filename,
                 cloudinary_url=cloudinary_url,
-                metadata=basic_metadata, # SQLAlchemy_JSON позволяет хранить словарь
+                # ИЗМЕНЕНО: теперь сохраняем в 'video_metadata'
+                video_metadata=basic_metadata, 
                 message=task_message
             )
             session.add(new_task)
@@ -182,37 +171,34 @@ def analyze_video():
             "taskId": public_id,
             "message": task_message,
             "cloudinary_url": cloudinary_url,
-            "metadata": basic_metadata
+            "metadata": basic_metadata # Здесь можно оставить 'metadata' для фронтенда
         }), 200
 
     except cloudinary.exceptions.Error as e:
         print(f"[PYTHON BACKEND] Cloudinary Error: {e}")
+        with Session() as session:
+            session.rollback() # Откатываем изменения в случае ошибки
         return jsonify({"error": f"Cloudinary upload failed: {str(e)}"}), 500
     except Exception as e:
         print(f"[PYTHON BACKEND] Общая ошибка: {e}")
-        # Если есть активная сессия, откатываем изменения в случае ошибки
         with Session() as session:
             session.rollback()
         return jsonify({"error": f"Internal server error: {str(e)}"}), 500
 
-# --- Эндпоинт для проверки статуса задачи ---
 @app.route('/task-status/<task_id>', methods=['GET'])
 def get_task_status(task_id):
     with Session() as session:
         task_info = session.query(Task).filter_by(task_id=task_id).first()
         if task_info:
-            return jsonify(task_info.to_dict()), 200 # Возвращаем данные задачи из БД
+            return jsonify(task_info.to_dict()), 200
         else:
             return jsonify({"message": "Task not found."}), 404
 
-# --- Эндпоинт-заглушка для будущих "тяжелых" задач (для локального воркера) ---
 @app.route('/heavy-tasks/pending', methods=['GET'])
 def get_heavy_tasks():
     return jsonify({"message": "No heavy tasks pending for local worker yet."}), 200
 
-# ----------- ENTRYPOINT -----------
 if __name__ == '__main__':
-    # При запуске приложения, создаем таблицы (если их нет)
     create_tables() 
     from waitress import serve
     port = int(os.environ.get('PORT', 8080))
