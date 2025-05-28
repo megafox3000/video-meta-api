@@ -4,4 +4,6 @@ gunicorn
 waitress
 flask-cors
 cloudinary
-
+psycopg2-binary   # <-- Добавьте это
+SQLAlchemy        # <-- Добавьте это
+sqlalchemy-json   # <-- Добавьте это (для типа JSON в SQLAlchemy)
