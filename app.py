@@ -9,6 +9,7 @@ import cloudinary.api
 
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, JSON
 from sqlalchemy.orm import sessionmaker, declarative_base
+import requests
 
 app = Flask(__name__)
 CORS(app)
@@ -117,74 +118,93 @@ def index():
     print("[PYTHON BACKEND] Корневой путь '/' был запрошен. Проверяем вывод print.")
     return jsonify({"status": "✅ Python Backend is up and running!"})
 
-@app.route('/analyze', methods=['POST'])
-def analyze_video():
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file uploaded'}), 400
+# НОВАЯ/ОБНОВЛЕННАЯ ФУНКЦИЯ ДЛЯ ЗАГРУЗКИ ВИДЕО
+@app.route('/upload_video', methods=['POST']) # Изменили маршрут на /upload_video
+def upload_video():
+    print("\n[PYTHON BACKEND] Получен запрос на /upload_video.")
+
+    if 'video' not in request.files: # Изменили 'file' на 'video'
+        print("[PYTHON BACKEND] No video file provided in request.")
+        return jsonify({"error": "No video file provided"}), 400
     
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({"error": "No selected file"}), 400
+    video_file = request.files['video'] # Изменили 'file' на 'video'
+    if video_file.filename == '':
+        print("[PYTHON BACKEND] No selected video file.")
+        return jsonify({"error": "No selected video file"}), 400
 
-    username = request.form.get('username', 'unknown_user')
+    instagram_username = request.form.get('instagram_username') # Получаем имя пользователя Instagram из формы
+    
+    print(f"[PYTHON BACKEND] Загружаем файл '{video_file.filename}' для пользователя Instagram: '{instagram_username}'")
 
-    print(f"\n[PYTHON BACKEND] Получен файл '{file.filename}' от пользователя '{username}' на /analyze.")
+    if not instagram_username:
+        print("[PYTHON BACKEND] Instagram username is missing.")
+        return jsonify({"error": "Instagram username is required"}), 400
+    
+    # Очистка имени пользователя для безопасного использования в пути Cloudinary
+    # Убираем символы, которые могут вызвать проблемы в путях файловых систем/URL
+    cleaned_username = "".join(c for c in instagram_username if c.isalnum() or c in ('_', '-')).strip()
+    if not cleaned_username:
+        print(f"[PYTHON BACKEND] Cleaned Instagram username is empty for: {instagram_username}")
+        return jsonify({"error": "Invalid Instagram username"}), 400
 
     try:
+        # Получаем оригинальное имя файла без расширения
+        original_filename_base = os.path.splitext(video_file.filename)[0]
+        
+        # Формируем полный public_id: hife_video_analysis/имя_пользователя/оригинальное_имя_файла
+        # Cloudinary автоматически добавит расширение файла.
+        full_public_id = f"hife_video_analysis/{cleaned_username}/{original_filename_base}"
+
         upload_result = cloudinary.uploader.upload(
-            file,
+            video_file,
             resource_type="video",
-            folder="hife_video_analysis",
-            overwrite=True,
-            quality="auto",
-            format="mp4"
+            public_id=full_public_id,     # Полный путь + имя файла (без расширения)
+            unique_filename=False,         # Не добавлять уникальный суффикс (если имя уже есть, перезапишет)
+            overwrite=True,                # Перезаписывать, если файл с таким public_id уже существует
+            quality="auto",                # Сохраняем эти настройки
+            format="mp4",                  # Сохраняем эти настройки
+            tags=["hife_analysis", cleaned_username] # Добавляем теги для удобства поиска
         )
 
         public_id = upload_result.get('public_id')
         cloudinary_url = upload_result.get('secure_url')
         
-        basic_metadata = {
-            "format": upload_result.get('format'),
-            "duration": upload_result.get('duration'),
-            "width": upload_result.get('width'),
-            "height": upload_result.get('height'),
-            "size_bytes": upload_result.get('bytes'),
-            "bit_rate": upload_result.get('bit_rate')
-        }
+        # Возвращаем ВСЕ метаданные, полученные от Cloudinary
+        full_metadata = upload_result 
         
         task_status = "completed"
-        task_message = "Видео успешно загружено на Cloudinary и получены базовые метаданные."
+        task_message = "Видео успешно загружено на Cloudinary и получены полные метаданные."
 
         with Session() as session:
             new_task = Task(
-                task_id=public_id,
-                username=username,
+                task_id=public_id, # Используем public_id как task_id
+                username=cleaned_username, # Сохраняем очищенное имя пользователя
                 status=task_status,
-                filename=file.filename,
+                filename=video_file.filename, # Оригинальное имя файла
                 cloudinary_url=cloudinary_url,
-                video_metadata=basic_metadata, 
+                video_metadata=full_metadata, # Сохраняем ПОЛНЫЕ метаданные
                 message=task_message
             )
             session.add(new_task)
             session.commit()
             print(f"[PYTHON BACKEND] Задача '{public_id}' сохранена в БД.")
 
-        print(f"[PYTHON BACKEND] Видео '{file.filename}' загружено на Cloudinary. Public ID: {public_id}")
+        print(f"[PYTHON BACKEND] Видео '{video_file.filename}' загружено на Cloudinary. Public ID: {public_id}")
         return jsonify({
             "status": "task_created",
             "taskId": public_id,
             "message": task_message,
             "cloudinary_url": cloudinary_url,
-            "metadata": basic_metadata
+            "metadata": full_metadata # Возвращаем полные метаданные клиенту
         }), 200
 
     except cloudinary.exceptions.Error as e:
-        print(f"[PYTHON BACKEND] Cloudinary Error: {e}")
+        print(f"[PYTHON BACKEND] Cloudinary Error during upload: {e}")
         with Session() as session:
             session.rollback()
         return jsonify({"error": f"Cloudinary upload failed: {str(e)}"}), 500
     except Exception as e:
-        print(f"[PYTHON BACKEND] Общая ошибка: {e}")
+        print(f"[PYTHON BACKEND] General error during upload: {e}")
         with Session() as session:
             session.rollback()
         return jsonify({"error": f"Internal server error: {str(e)}"}), 500
