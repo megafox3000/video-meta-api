@@ -5,6 +5,7 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 import cloudinary
 import cloudinary.uploader
+
 import json # Добавить импорт json
 
 # --- Конфигурация Flask и SQLAlchemy ---
@@ -177,12 +178,22 @@ def upload_video():
                 'status': existing_task.status
             }), 200
 
-    except Exception as e:
+   except Exception as e:
         db.session.rollback() # Откатываем изменения в случае ошибки
         error_message = f"General error during upload: {e}"
         print(f"[PYTHON BACKEND] {error_message}")
-        print(f"[SQL: {e.orig.pginfo.query if hasattr(e.orig, 'pginfo') else 'N/A'}]")
-        print(f"[parameters: {e.orig.pginfo.parameters if hasattr(e.orig, 'pginfo') else 'N/A'}]")
+        
+        # --- ИСПРАВЛЕНИЕ: БОЛЕЕ УНИВЕРСАЛЬНЫЙ ВЫВОД ОШИБОК ---
+        # Проверяем, является ли исключение ошибкой SQLAlchemy с оригинальными деталями
+        from sqlalchemy.exc import SQLAlchemyError # Добавьте этот импорт в начало файла!
+        if isinstance(e, SQLAlchemyError) and hasattr(e.orig, 'pginfo'):
+            print(f"[SQL: {e.orig.pginfo.query}]")
+            print(f"[parameters: {e.orig.pginfo.parameters}]")
+        else:
+            # Для всех остальных типов ошибок просто выводим их строковое представление
+            print(f"[PYTHON BACKEND] Детали ошибки: {str(e)}")
+        # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
+
         return jsonify({'error': error_message}), 500
 
 # --- Endpoint для получения статуса задачи (без изменений, но убедитесь, что он есть) ---
