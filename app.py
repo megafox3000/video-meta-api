@@ -5,8 +5,9 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 import cloudinary
 import cloudinary.uploader
-
-import json # Добавить импорт json
+import cloudinary.api
+import json
+from sqlalchemy.exc import SQLAlchemyError 
 
 # --- Конфигурация Flask и SQLAlchemy ---
 app = Flask(__name__)
