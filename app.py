@@ -1,107 +1,178 @@
 import os
-import datetime
 from flask import Flask, request, jsonify
-from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
+from datetime import datetime
+
 import cloudinary
 import cloudinary.uploader
-import cloudinary.api # ИСПРАВЛЕНИЕ: Добавлен импорт cloudinary.api
-import json
+import cloudinary.api # Это было добавлено ранее, но важно, чтобы оно было!
+
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, JSON
+from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.exc import SQLAlchemyError # ИСПРАВЛЕНИЕ: Добавлен импорт SQLAlchemyError
+import requests
 
-
-# --- Конфигурация Flask и SQLAlchemy ---
 app = Flask(__name__)
-# Используйте вашу реальную строку подключения к базе данных Render PostgreSQL
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-db = SQLAlchemy(app)
 CORS(app)
 
-# --- Конфигурация Cloudinary ---
 cloudinary.config(
-    cloud_name=os.environ.get('CLOUDINARY_CLOUD_NAME'),
-    api_key=os.environ.get('CLOUDINARY_API_KEY'),
-    api_secret=os.environ.get('CLOUDINARY_API_SECRET')
+    cloud_name = os.environ.get('CLOUDINARY_CLOUD_NAME'),
+    api_key = os.environ.get('CLOUDINARY_API_KEY'),
+    api_secret = os.environ.get('CLOUDINARY_API_SECRET'),
+    secure = True
 )
 
-# --- Модель базы данных ---
-class Task(db.Model):
+DATABASE_URL = os.environ.get('DATABASE_URL')
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL environment variable is not set!")
+
+engine = create_engine(DATABASE_URL)
+Session = sessionmaker(bind=engine)
+Base = declarative_base()
+
+class Task(Base):
     __tablename__ = 'tasks'
-    id = db.Column(db.Integer, primary_key=True)
-    task_id = db.Column(db.String(255), unique=True, nullable=False)
-    username = db.Column(db.String(255), nullable=False)
-    status = db.Column(db.String(50), nullable=False, default='pending')
-    filename = db.Column(db.String(255), nullable=False)
-    cloudinary_url = db.Column(db.String(500), nullable=True)
-    video_metadata = db.Column(db.JSON, nullable=True)
-    message = db.Column(db.Text, nullable=True)
-    timestamp = db.Column(db.DateTime, default=datetime.datetime.now)
+
+    id = Column(Integer, primary_key=True)
+    task_id = Column(String, unique=True, nullable=False)
+    username = Column(String)
+    status = Column(String)
+    filename = Column(String)
+    cloudinary_url = Column(String)
+    video_metadata = Column(JSON) # Это уже было JSON-поле
+    message = Column(Text)
+    timestamp = Column(DateTime, default=datetime.now)
 
     def __repr__(self):
-        return f"<Task {self.task_id}>"
+        return f"<Task(task_id='{self.task_id}', status='{self.status}')>"
+    
+    def to_dict(self):
+        return {
+            "taskId": self.task_id,
+            "username": self.username,
+            "status": self.status,
+            "filename": self.filename,
+            "cloudinary_url": self.cloudinary_url,
+            "metadata": self.video_metadata, 
+            "message": self.message,
+            "timestamp": self.timestamp.isoformat()
+        }
 
-# !!! Обязательно создайте таблицы, если они еще не существуют.
-#    В продакшене это обычно делается через миграции, но для простоты
-#    можно использовать db.create_all() при первом запуске, если таблиц нет.
-#
-# with app.app_context():
-#    db.create_all()
-#    print("Database tables created or already exist.") # Можно добавить для логов при деплое
+def create_tables():
+    # Эта функция создает таблицы, только если их еще нет в базе данных
+    Base.metadata.create_all(engine)
+    print("Database tables created or already exist.")
 
+# --- ВЫЗОВ create_tables() ПЕРЕМЕЩЕН СЮДА ---
+# Это позволит таблицам создаваться при запуске приложения Gunicorn'ом/Waitress'ом.
+create_tables()
 
-# --- Endpoint для загрузки видео ---
+# ----------- GPS & METADATA FUNCTIONS (без изменений) -----------
+def parse_gps_tags(tags):
+    gps_data = {}
+    for key, value in tags.items():
+        if "location" in key.lower() or "gps" in key.lower():
+            gps_data[key] = value
+    return gps_data
+
+def extract_coordinates_from_tags(tags):
+    gps_data = []
+    import re
+    for key, value in tags.items():
+        if "ISO6709" in key and re.match(r"^[\+\-]\d+(\.\d+)?[\+\-]\d+(\.\d+)?", value):
+            match = re.match(r"^([\+\-]\d+(\.\d+)?)([\+\-]\d+(\.\d+)?).*", value)
+            if match:
+                lat = match.group(1)
+                lon = match.group(3)
+                link = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+                address = reverse_geocode(lat, lon)
+                gps_data.append({
+                    "tag": key,
+                    "latitude": float(lat),
+                    "longitude": float(lon),
+                    "link": link,
+                    "address": address
+                })
+    return gps_data
+
+def reverse_geocode(lat, lon):
+    try:
+        url = "https://nominatim.openstreetmap.org/reverse"
+        params = {
+            "lat": lat,
+            "lon": lon,
+            "format": "json",
+            "zoom": 14,
+            "addressdetails": 1
+        }
+        headers = {"User-Agent": "VideoMetaApp/1.0"}
+        response = requests.get(url, params=params, headers=headers)
+        data = response.json()
+        return data.get("display_name", "Адрес не найден.")
+    except Exception as e:
+        return f"Ошибка геокодинга: {e}"
+
+@app.route('/')
+def index():
+    print("[PYTHON BACKEND] Корневой путь '/' был запрошен. Проверяем вывод print.")
+    return jsonify({"status": "✅ Python Backend is up and running!"})
+
+# НОВАЯ/ОБНОВЛЕННАЯ ФУНКЦИЯ ДЛЯ ЗАГРУЗКИ ВИДЕО
 @app.route('/upload_video', methods=['POST'])
 def upload_video():
-    if 'video' not in request.files:
-        return jsonify({'error': 'No video file provided'}), 400
+    print("\n[PYTHON BACKEND] Получен запрос на /upload_video.")
 
+    if 'video' not in request.files:
+        print("[PYTHON BACKEND] No video file provided in request.")
+        return jsonify({"error": "No video file provided"}), 400
+    
     video_file = request.files['video']
+    if video_file.filename == '':
+        print("[PYTHON BACKEND] No selected video file.")
+        return jsonify({"error": "No selected video file"}), 400
+
     instagram_username = request.form.get('instagram_username')
+    
+    print(f"[PYTHON BACKEND] Загружаем файл '{video_file.filename}' для пользователя Instagram: '{instagram_username}'")
 
     if not instagram_username:
-        return jsonify({'error': 'Instagram username is required'}), 400
+        print("[PYTHON BACKEND] Instagram username is missing.")
+        return jsonify({"error": "Instagram username is required"}), 400
+    
+    # Очистка имени пользователя для безопасного использования в пути Cloudinary
+    cleaned_username = "".join(c for c in instagram_username if c.isalnum() or c in ('_', '-')).strip()
+    if not cleaned_username:
+        print(f"[PYTHON BACKEND] Cleaned Instagram username is empty for: {instagram_username}")
+        return jsonify({"error": "Invalid Instagram username"}), 400
 
-    filename = video_file.filename
-    if not filename:
-        return jsonify({'error': 'Filename is missing'}), 400
-
-    # --- Формируем task_id (без уникального суффикса для проверки существования) ---
-    filename_no_ext = os.path.splitext(filename)[0]
-    generated_task_id = f"hife_video_analysis/{instagram_username}/{filename_no_ext}"
-
-    print(f"[PYTHON BACKEND] Загружаем файл '{filename}' для пользователя Instagram: '{instagram_username}'")
-
+    session = Session() # ИСПРАВЛЕНИЕ: Создаем сессию здесь, чтобы использовать её в try/except блоках
     try:
+        original_filename_base = os.path.splitext(video_file.filename)[0]
+        full_public_id = f"hife_video_analysis/{cleaned_username}/{original_filename_base}"
+
         # --- ПРОВЕРЯЕМ, СУЩЕСТВУЕТ ЛИ ЗАДАЧА УЖЕ В БД ---
-        existing_task = Task.query.filter_by(task_id=generated_task_id).first()
+        existing_task = session.query(Task).filter_by(task_id=full_public_id).first()
 
         cloudinary_url = None
         video_metadata = None
-        
-        # Переменная для отслеживания, был ли ресурс найден на Cloudinary
         resource_found_on_cloudinary = False
 
         if existing_task:
-            print(f"[PYTHON BACKEND] Задача с task_id '{generated_task_id}' уже существует. Попытка обновить информацию.")
-            # Попытаемся получить метаданные по public_id (который является частью task_id)
-            cloudinary_public_id = generated_task_id # Предполагаем, что ваш public_id совпадает с task_id
-
+            print(f"[PYTHON BACKEND] Задача с task_id '{full_public_id}' уже существует. Попытка обновить информацию.")
             try:
                 # Получаем информацию о ресурсе с Cloudinary
-                resource_info = cloudinary.api.resource(cloudinary_public_id, resource_type="video")
+                resource_info = cloudinary.api.resource(full_public_id, resource_type="video")
                 cloudinary_url = resource_info.get('secure_url')
-                # Удаляем ненужные поля из метаданных Cloudinary перед сохранением в БД
                 video_metadata = {k: v for k, v in resource_info.items() if k not in ['url', 'secure_url', 'type']}
-                resource_found_on_cloudinary = True # Ресурс найден на Cloudinary
+                resource_found_on_cloudinary = True
 
                 # Обновляем существующую запись в БД
                 existing_task.status = 'completed'
                 existing_task.cloudinary_url = cloudinary_url
                 existing_task.video_metadata = video_metadata
                 existing_task.message = 'Видео уже существует на Cloudinary. Информация в БД обновлена.'
-                existing_task.timestamp = datetime.datetime.now()
-                db.session.commit()
+                existing_task.timestamp = datetime.now()
+                session.commit()
 
                 return jsonify({
                     'message': 'Video already exists, info updated.',
@@ -113,73 +184,76 @@ def upload_video():
                 }), 200
 
             except cloudinary.exceptions.Error as e:
-                # Если файл не найден на Cloudinary, хотя запись в БД есть (например, удален вручную)
-                print(f"[PYTHON BACKEND] Ошибка Cloudinary при попытке получить существующий ресурс ({generated_task_id}): {e}")
-                # Мы не удаляем запись из БД здесь. Вместо этого, мы просто продолжим,
-                # и код ниже попытается загрузить файл заново.
-                # Это позволит "восстановить" запись в БД, если Cloudinary-ресурс был удален.
-                pass # Продолжаем выполнение, чтобы попытаться загрузить файл заново
+                print(f"[PYTHON BACKEND] Ошибка Cloudinary при попытке получить существующий ресурс ({full_public_id}): {e}")
+                # Если файл не найден на Cloudinary, мы проигнорируем эту ошибку
+                # и продолжим к загрузке нового файла ниже.
+                pass 
 
-        # Если задача не найдена в БД ИЛИ возникла ошибка при получении из Cloudinary
-        # (т.е. resource_found_on_cloudinary == False)
+        # Если задача не найдена в БД ИЛИ ресурс не был найден на Cloudinary
         if not existing_task or not resource_found_on_cloudinary:
-            print(f"[PYTHON BACKEND] Загружаем/перезагружаем видео на Cloudinary для '{generated_task_id}'.")
-            # --- Загрузка/Перезагрузка видео на Cloudinary ---
+            print(f"[PYTHON BACKEND] Загружаем/перезагружаем видео на Cloudinary для '{full_public_id}'.")
             upload_result = cloudinary.uploader.upload(
                 video_file,
                 resource_type="video",
-                folder=f"hife_video_analysis/{instagram_username}", # Папка на Cloudinary
-                public_id=filename_no_ext, # Имя файла на Cloudinary без расширения
-                overwrite=True # Разрешаем перезапись, если файл с таким public_id уже есть на Cloudinary
+                folder=f"hife_video_analysis/{cleaned_username}",
+                public_id=original_filename_base, # Имя файла на Cloudinary без расширения, папка уже в folder
+                unique_filename=False,
+                overwrite=True,
+                quality="auto",
+                format="mp4",
+                tags=["hife_analysis", cleaned_username]
             )
             
             uploaded_video_info = upload_result
             cloudinary_url = uploaded_video_info['secure_url']
-            
-            # Удаляем ненужные поля из метаданных Cloudinary перед сохранением в БД
             video_metadata = {k: v for k, v in uploaded_video_info.items() if k not in ['url', 'secure_url', 'type']}
 
-            # --- Создание или обновление записи в БД ---
             if existing_task:
-                # Обновляем существующую запись, если мы дошли сюда, потому что Cloudinary-ресурс не был найден
+                # Обновляем существующую запись
                 existing_task.status = 'completed'
                 existing_task.cloudinary_url = cloudinary_url
                 existing_task.video_metadata = video_metadata
                 existing_task.message = 'Видео загружено заново на Cloudinary и информация в БД обновлена.'
-                existing_task.timestamp = datetime.datetime.now()
+                existing_task.timestamp = datetime.now()
             else:
-                # Создаем новую запись, если задачи не было в БД изначально
+                # Создаем новую запись
                 new_task = Task(
-                    task_id=generated_task_id,
-                    username=instagram_username,
+                    task_id=full_public_id, # Используем full_public_id как task_id
+                    username=cleaned_username,
                     status='completed',
-                    filename=filename,
+                    filename=video_file.filename,
                     cloudinary_url=cloudinary_url,
                     video_metadata=video_metadata,
                     message='Видео успешно загружено на Cloudinary и получены полные метаданные.',
-                    timestamp=datetime.datetime.now()
+                    timestamp=datetime.now()
                 )
-                db.session.add(new_task)
-                existing_task = new_task # Присваиваем new_task к existing_task для унификации ответа
+                session.add(new_task)
+                existing_task = new_task
             
-            db.session.commit()
+            session.commit()
+            print(f"[PYTHON BACKEND] Задача '{existing_task.task_id}' сохранена/обновлена в БД.")
 
             return jsonify({
-                'message': 'Video uploaded and saved to DB.',
-                'taskId': existing_task.task_id,
-                'cloudinary_url': existing_task.cloudinary_url,
-                'original_filename': existing_task.filename,
-                'metadata': existing_task.video_metadata,
-                'status': existing_task.status
+                "status": "task_created",
+                "taskId": existing_task.task_id,
+                "message": existing_task.message,
+                "cloudinary_url": existing_task.cloudinary_url,
+                "metadata": existing_task.video_metadata
             }), 200
 
-    # ИСПРАВЛЕНИЕ: Исправлен отступ для except-блока, он должен быть на том же уровне, что и try
+    except cloudinary.exceptions.Error as e:
+        session.rollback() # Откатываем изменения в случае ошибки
+        error_message = f"Cloudinary Error during upload: {e}"
+        print(f"[PYTHON BACKEND] {error_message}")
+        return jsonify({"error": f"Cloudinary upload failed: {str(e)}"}), 500
+    
+    # ИСПРАВЛЕНИЕ: Отступ этого блока теперь правильный.
     except Exception as e:
-        db.session.rollback() # Откатываем изменения в случае ошибки
+        session.rollback() # Откатываем изменения в случае ошибки
         error_message = f"General error during upload: {e}"
         print(f"[PYTHON BACKEND] {error_message}")
         
-        # ИСПРАВЛЕНИЕ: Более универсальный вывод ошибок
+        # ИСПРАВЛЕНИЕ: Универсальный вывод ошибок с учетом SQLAlchemyError
         if isinstance(e, SQLAlchemyError) and hasattr(e.orig, 'pginfo'):
             print(f"[SQL: {e.orig.pginfo.query}]")
             print(f"[parameters: {e.orig.pginfo.parameters}]")
@@ -187,27 +261,32 @@ def upload_video():
             print(f"[PYTHON BACKEND] Детали ошибки: {str(e)}")
 
         return jsonify({'error': error_message}), 500
+    finally:
+        session.close() # ИСПРАВЛЕНИЕ: Обязательно закрываем сессию SQLAlchemy
 
-# --- Endpoint для получения статуса задачи ---
-@app.route('/task-status/<task_id>', methods=['GET'])
+@app.route('/task-status/<path:task_id>', methods=['GET'])
 def get_task_status(task_id):
-    task = Task.query.filter_by(task_id=task_id).first()
-    if task:
-        return jsonify({
-            'taskId': task.task_id,
-            'status': task.status,
-            'filename': task.filename,
-            'cloudinary_url': task.cloudinary_url,
-            'metadata': task.video_metadata,
-            'message': task.message,
-            'timestamp': task.timestamp.isoformat()
-        }), 200
-    return jsonify({'error': 'Task not found'}), 404
+    print(f"\n[PYTHON BACKEND] Получен запрос статуса для task_id: '{task_id}'")
+    session = Session() # ИСПРАВЛЕНИЕ: Создаем сессию
+    try:
+        print(f"[PYTHON BACKEND] Поиск задачи в БД с task_id: '{task_id}'")
+        task_info = session.query(Task).filter_by(task_id=task_id).first()
+        if task_info:
+            print(f"[PYTHON BACKEND] Задача найдена в БД: {task_info.task_id}, статус: {task_info.status}")
+            return jsonify(task_info.to_dict()), 200
+        else:
+            print(f"[PYTHON BACKEND] Задача с task_id '{task_id}' НЕ НАЙДЕНА в БД.")
+            return jsonify({"message": "Task not found."}), 404
+    finally:
+        session.close() # ИСПРАВЛЕНИЕ: Закрываем сессию
 
-# --- Запуск приложения ---
+@app.route('/heavy-tasks/pending', methods=['GET'])
+def get_heavy_tasks():
+    return jsonify({"message": "No heavy tasks pending for local worker yet."}), 200
+
 if __name__ == '__main__':
-    # В продакшене используйте Gunicorn или аналогичное
-    # Render автоматически устанавливает переменную окружения PORT
-    # Убедитесь, что ваш скрипт Build Command на Render не запускает Flask в debug режиме,
-    # а использует Gunicorn, например: gunicorn app:app
-    app.run(debug=True, port=os.environ.get('PORT', 5000))
+    # ЭТОТ БЛОК НЕ ВЫПОЛНЯЕТСЯ НА RENDER ПРИ ЗАПУСКЕ GUNICORN/WAITRESS
+    # create_tables() вызывается выше при импорте модуля
+    from waitress import serve
+    port = int(os.environ.get('PORT', 8080))
+    serve(app, host='0.0.0.0', port=port)
