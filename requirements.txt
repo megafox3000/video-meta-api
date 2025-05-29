@@ -7,3 +7,4 @@ cloudinary
 psycopg2-binary   # <-- Добавьте это
 SQLAlchemy        # <-- Добавьте это
 sqlalchemy-json   # <-- Добавьте это (для типа JSON в SQLAlchemy)
+Flask-SQLAlchemy
