@@ -5,12 +5,14 @@ from datetime import datetime
 
 import cloudinary
 import cloudinary.uploader
-import cloudinary.api # Это было добавлено ранее, но важно, чтобы оно было!
+import cloudinary.api 
 
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, JSON
 from sqlalchemy.orm import sessionmaker, declarative_base
-from sqlalchemy.exc import SQLAlchemyError # ИСПРАВЛЕНИЕ: Добавлен импорт SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError 
 import requests
+import hashlib # ДОБАВЛЕНО для конкатенации
+import time # ДОБАВЛЕНО для конкатенации
 
 app = Flask(__name__)
 CORS(app)
@@ -39,7 +41,7 @@ class Task(Base):
     status = Column(String)
     filename = Column(String)
     cloudinary_url = Column(String)
-    video_metadata = Column(JSON) # Это уже было JSON-поле
+    video_metadata = Column(JSON) 
     message = Column(Text)
     timestamp = Column(DateTime, default=datetime.now)
 
@@ -53,21 +55,17 @@ class Task(Base):
             "status": self.status,
             "filename": self.filename,
             "cloudinary_url": self.cloudinary_url,
-            "metadata": self.video_metadata, 
+            "metadata": self.video_metadata,
             "message": self.message,
             "timestamp": self.timestamp.isoformat()
         }
 
 def create_tables():
-    # Эта функция создает таблицы, только если их еще нет в базе данных
     Base.metadata.create_all(engine)
     print("Database tables created or already exist.")
 
-# --- ВЫЗОВ create_tables() ПЕРЕМЕЩЕН СЮДА ---
-# Это позволит таблицам создаваться при запуске приложения Gunicorn'ом/Waitress'ом.
 create_tables()
 
-# ----------- GPS & METADATA FUNCTIONS (без изменений) -----------
 def parse_gps_tags(tags):
     gps_data = {}
     for key, value in tags.items():
@@ -117,7 +115,6 @@ def index():
     print("[PYTHON BACKEND] Корневой путь '/' был запрошен. Проверяем вывод print.")
     return jsonify({"status": "✅ Python Backend is up and running!"})
 
-# НОВАЯ/ОБНОВЛЕННАЯ ФУНКЦИЯ ДЛЯ ЗАГРУЗКИ ВИДЕО
 @app.route('/upload_video', methods=['POST'])
 def upload_video():
     print("\n[PYTHON BACKEND] Получен запрос на /upload_video.")
@@ -139,18 +136,16 @@ def upload_video():
         print("[PYTHON BACKEND] Instagram username is missing.")
         return jsonify({"error": "Instagram username is required"}), 400
     
-    # Очистка имени пользователя для безопасного использования в пути Cloudinary
     cleaned_username = "".join(c for c in instagram_username if c.isalnum() or c in ('_', '-')).strip()
     if not cleaned_username:
         print(f"[PYTHON BACKEND] Cleaned Instagram username is empty for: {instagram_username}")
         return jsonify({"error": "Invalid Instagram username"}), 400
 
-    session = Session() # ИСПРАВЛЕНИЕ: Создаем сессию здесь, чтобы использовать её в try/except блоках
+    session = Session() 
     try:
         original_filename_base = os.path.splitext(video_file.filename)[0]
         full_public_id = f"hife_video_analysis/{cleaned_username}/{original_filename_base}"
 
-        # --- ПРОВЕРЯЕМ, СУЩЕСТВУЕТ ЛИ ЗАДАЧА УЖЕ В БД ---
         existing_task = session.query(Task).filter_by(task_id=full_public_id).first()
 
         cloudinary_url = None
@@ -160,13 +155,11 @@ def upload_video():
         if existing_task:
             print(f"[PYTHON BACKEND] Задача с task_id '{full_public_id}' уже существует. Попытка обновить информацию.")
             try:
-                # Получаем информацию о ресурсе с Cloudinary
                 resource_info = cloudinary.api.resource(full_public_id, resource_type="video")
                 cloudinary_url = resource_info.get('secure_url')
                 video_metadata = {k: v for k, v in resource_info.items() if k not in ['url', 'secure_url', 'type']}
                 resource_found_on_cloudinary = True
 
-                # Обновляем существующую запись в БД
                 existing_task.status = 'completed'
                 existing_task.cloudinary_url = cloudinary_url
                 existing_task.video_metadata = video_metadata
@@ -185,18 +178,15 @@ def upload_video():
 
             except cloudinary.exceptions.Error as e:
                 print(f"[PYTHON BACKEND] Ошибка Cloudinary при попытке получить существующий ресурс ({full_public_id}): {e}")
-                # Если файл не найден на Cloudinary, мы проигнорируем эту ошибку
-                # и продолжим к загрузке нового файла ниже.
                 pass 
 
-        # Если задача не найдена в БД ИЛИ ресурс не был найден на Cloudinary
         if not existing_task or not resource_found_on_cloudinary:
             print(f"[PYTHON BACKEND] Загружаем/перезагружаем видео на Cloudinary для '{full_public_id}'.")
             upload_result = cloudinary.uploader.upload(
                 video_file,
                 resource_type="video",
                 folder=f"hife_video_analysis/{cleaned_username}",
-                public_id=original_filename_base, # Имя файла на Cloudinary без расширения, папка уже в folder
+                public_id=original_filename_base, 
                 unique_filename=False,
                 overwrite=True,
                 quality="auto",
@@ -209,16 +199,14 @@ def upload_video():
             video_metadata = {k: v for k, v in uploaded_video_info.items() if k not in ['url', 'secure_url', 'type']}
 
             if existing_task:
-                # Обновляем существующую запись
                 existing_task.status = 'completed'
                 existing_task.cloudinary_url = cloudinary_url
                 existing_task.video_metadata = video_metadata
                 existing_task.message = 'Видео загружено заново на Cloudinary и информация в БД обновлена.'
                 existing_task.timestamp = datetime.now()
             else:
-                # Создаем новую запись
                 new_task = Task(
-                    task_id=full_public_id, # Используем full_public_id как task_id
+                    task_id=full_public_id, 
                     username=cleaned_username,
                     status='completed',
                     filename=video_file.filename,
@@ -242,18 +230,16 @@ def upload_video():
             }), 200
 
     except cloudinary.exceptions.Error as e:
-        session.rollback() # Откатываем изменения в случае ошибки
+        session.rollback() 
         error_message = f"Cloudinary Error during upload: {e}"
         print(f"[PYTHON BACKEND] {error_message}")
         return jsonify({"error": f"Cloudinary upload failed: {str(e)}"}), 500
     
-    # ИСПРАВЛЕНИЕ: Отступ этого блока теперь правильный.
     except Exception as e:
-        session.rollback() # Откатываем изменения в случае ошибки
+        session.rollback() 
         error_message = f"General error during upload: {e}"
         print(f"[PYTHON BACKEND] {error_message}")
         
-        # ИСПРАВЛЕНИЕ: Универсальный вывод ошибок с учетом SQLAlchemyError
         if isinstance(e, SQLAlchemyError) and hasattr(e.orig, 'pginfo'):
             print(f"[SQL: {e.orig.pginfo.query}]")
             print(f"[parameters: {e.orig.pginfo.parameters}]")
@@ -262,12 +248,12 @@ def upload_video():
 
         return jsonify({'error': error_message}), 500
     finally:
-        session.close() # ИСПРАВЛЕНИЕ: Обязательно закрываем сессию SQLAlchemy
+        session.close() 
 
 @app.route('/task-status/<path:task_id>', methods=['GET'])
 def get_task_status(task_id):
     print(f"\n[PYTHON BACKEND] Получен запрос статуса для task_id: '{task_id}'")
-    session = Session() # ИСПРАВЛЕНИЕ: Создаем сессию
+    session = Session() 
     try:
         print(f"[PYTHON BACKEND] Поиск задачи в БД с task_id: '{task_id}'")
         task_info = session.query(Task).filter_by(task_id=task_id).first()
@@ -278,15 +264,89 @@ def get_task_status(task_id):
             print(f"[PYTHON BACKEND] Задача с task_id '{task_id}' НЕ НАЙДЕНА в БД.")
             return jsonify({"message": "Task not found."}), 404
     finally:
-        session.close() # ИСПРАВЛЕНИЕ: Закрываем сессию
+        session.close() 
 
 @app.route('/heavy-tasks/pending', methods=['GET'])
 def get_heavy_tasks():
     return jsonify({"message": "No heavy tasks pending for local worker yet."}), 200
 
+# НОВЫЙ ЭНДПОИНТ ДЛЯ КОНКАТЕНАЦИИ ВИДЕО
+@app.route('/concatenate_videos', methods=['POST'])
+def concatenate_videos():
+    data = request.get_json()
+    video_public_ids = data.get('public_ids')
+
+    if not video_public_ids or not isinstance(video_public_ids, list) or len(video_public_ids) < 2:
+        return jsonify({"error": "Please provide at least two video public_ids to concatenate."}), 400
+
+    video_details = []
+    total_duration = 0
+    # Получаем длительность каждого видео для правильного вычисления start_offset
+    for public_id in video_public_ids:
+        try:
+            # Получаем информацию о ресурсе Cloudinary
+            res = cloudinary.api.resource(public_id, resource_type="video")
+            duration_sec = res.get("duration", 0) # Длительность в секундах
+            video_details.append({
+                "public_id": public_id,
+                "duration": duration_sec
+            })
+            total_duration += duration_sec
+        except Exception as e:
+            print(f"Error fetching resource {public_id}: {e}")
+            return jsonify({"error": f"Failed to fetch details for video '{public_id}'. It might not exist or is not a video. Error: {str(e)}"}), 500
+
+    transformations = []
+    current_offset = 0 
+
+    # Создаем трансформации для объединения видео
+    # Первое видео используется как базовое
+    for i, detail in enumerate(video_details):
+        if i == 0:
+            # Первое видео не требует оверлея, оно является основой
+            pass
+        else:
+            # Последующие видео добавляются как оверлеи
+            transformations.append({
+                'overlay': {'resource_type': 'video', 'public_id': detail['public_id']},
+                'flags': 'splice', # Флаг 'splice' для последовательного объединения
+                'start_offset': current_offset # Смещение для начала текущего видео
+            })
+        current_offset += detail['duration'] # Обновляем смещение для следующего видео
+
+    try:
+        # Генерируем URL объединенного видео. Cloudinary обработает трансформации.
+        concatenated_transform_url = cloudinary.utils.cloudinary_url(
+            video_public_ids[0], # Используем public_id первого видео как основу
+            resource_type="video",
+            transformation=transformations,
+            format="mp4" # Указываем формат для объединенного видео
+        )[0] # cloudinary_url возвращает кортеж, берем первый элемент (URL)
+
+        # Создаем уникальный public_id для нового объединенного видео
+        new_public_id_base = f"concatenated_{video_public_ids[0].replace('/', '_')}" # База из первого public_id
+        unique_suffix = hashlib.md5(str(time.time()).encode()).hexdigest()[:8] # Уникальный суффикс
+        final_new_public_id = f"{new_public_id_base}_{unique_suffix}"
+
+        # Загружаем (сохраняем) объединенное видео как новый ресурс в Cloudinary
+        upload_result = cloudinary.uploader.upload(
+            concatenated_transform_url,
+            resource_type="video",
+            public_id=final_new_public_id, # Новый уникальный public_id
+            invalidate=True # Инвалидировать CDN кеш для нового ресурса
+        )
+
+        return jsonify({
+            "success": True,
+            "new_public_id": upload_result.get("public_id"),
+            "new_video_url": upload_result.get("secure_url")
+        }), 200
+
+    except Exception as e:
+        print(f"Concatenation error: {e}")
+        return jsonify({"error": f"Failed to concatenate videos: {str(e)}"}), 500
+
 if __name__ == '__main__':
-    # ЭТОТ БЛОК НЕ ВЫПОЛНЯЕТСЯ НА RENDER ПРИ ЗАПУСКЕ GUNICORN/WAITRESS
-    # create_tables() вызывается выше при импорте модуля
     from waitress import serve
     port = int(os.environ.get('PORT', 8080))
     serve(app, host='0.0.0.0', port=port)
