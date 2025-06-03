@@ -36,14 +36,15 @@ Session = sessionmaker(bind=engine)
 class Task(Base):
     __tablename__ = 'tasks'
 
-    id = Column(String, primary_key=True, unique=True, nullable=False) # Используем String для task_id/public_id
+    id = Column(String, primary_key=True, unique=True, nullable=False)
     instagram_username = Column(String)
     email = Column(String)
     linkedin_profile = Column(String)
     original_filename = Column(String)
     status = Column(String) # Например: 'uploaded', 'processing', 'completed', 'error', 'concatenated'
     cloudinary_url = Column(String)
-    metadata = Column(JSON) # Хранение полных метаданных Cloudinary
+    # ИЗМЕНЕНО: Переименовали 'metadata' в 'video_metadata'
+    video_metadata = Column(JSON) # Хранение полных метаданных Cloudinary
     message = Column(Text)
     timestamp = Column(DateTime, default=datetime.now)
 
@@ -59,7 +60,8 @@ class Task(Base):
             "original_filename": self.original_filename,
             "status": self.status,
             "cloudinary_url": self.cloudinary_url,
-            "metadata": self.metadata,
+            # ИЗМЕНЕНО: Используем новое имя поля при конвертации в словарь
+            "metadata": self.video_metadata, # Здесь по-прежнему "metadata" для совместимости с фронтендом
             "message": self.message,
             "timestamp": self.timestamp.isoformat() if self.timestamp else None
         }
