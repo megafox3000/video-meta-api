@@ -8,8 +8,8 @@ from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, J
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.exc import SQLAlchemyError
 from datetime import datetime
-import hashlib # Оставляем для конкатенации
-import time # Оставляем для конкатенации
+import hashlib 
+import time 
 import requests
 
 app = Flask(__name__)
@@ -174,7 +174,7 @@ def upload_video():
                 # If resource found, update the existing task in DB with current Cloudinary data
                 existing_task.cloudinary_url = resource_info.get('secure_url')
                 existing_task.video_metadata = resource_info # Store full metadata
-                existing_task.status = 'uploaded' # Assume uploaded if found
+                existing_task.status = 'completed' # Changed from 'uploaded' to 'completed'
                 existing_task.message = 'Video already exists on Cloudinary. DB info updated.'
                 existing_task.timestamp = datetime.now() # Update timestamp
                 session.commit()
@@ -184,8 +184,8 @@ def upload_video():
                     'message': 'Video already exists, info updated.',
                     'taskId': existing_task.task_id,
                     'cloudinary_url': existing_task.cloudinary_url,
-                    'originalFilename': existing_task.original_filename, # Corrected: camelCase
-                    'metadata': existing_task.video_metadata, # Corrected: Return metadata
+                    'originalFilename': existing_task.original_filename, 
+                    'metadata': existing_task.video_metadata, 
                     'status': existing_task.status
                 }), 200
 
@@ -202,13 +202,13 @@ def upload_video():
             upload_result = cloudinary.uploader.upload(
                 file,
                 resource_type="video",
-                folder=f"hife_video_analysis/{cleaned_username}", # Corrected: Upload to user's folder
-                public_id=original_filename_base, # Corrected: public_id is just filename without folder
-                unique_filename=False, # We control the filename
-                overwrite=True, # Overwrite if public_id already exists
-                quality="auto", # Optimize video quality
-                format="mp4", # Ensure mp4 format
-                tags=["hife_analysis", cleaned_username] # Add tags for convenience
+                folder=f"hife_video_analysis/{cleaned_username}", 
+                public_id=original_filename_base, 
+                unique_filename=False, 
+                overwrite=True, 
+                quality="auto", 
+                format="mp4", 
+                tags=["hife_analysis", cleaned_username] 
             )
             print(f"[{full_public_id}] Cloudinary response after upload: {upload_result}")
 
@@ -223,54 +223,53 @@ def upload_video():
                     existing_task.email = email
                     existing_task.linkedin_profile = linkedin_profile
                     existing_task.original_filename = filename
-                    existing_task.status = 'uploaded' # Status after successful upload
+                    existing_task.status = 'completed' # Changed from 'uploaded' to 'completed'
                     existing_task.timestamp = datetime.now()
                     existing_task.cloudinary_url = cloudinary_url
-                    existing_task.video_metadata = upload_result # Store full Cloudinary response in video_metadata
+                    existing_task.video_metadata = upload_result 
                     existing_task.message = 'Video re-uploaded to Cloudinary and DB info updated.'
                 else:
                     # Create a new task in DB
                     print(f"[{full_public_id}] Creating a new task in DB.")
                     new_task = Task(
-                        task_id=full_public_id, # Assign full public_id to task_id field
+                        task_id=full_public_id, 
                         instagram_username=instagram_username,
                         email=email,
                         linkedin_profile=linkedin_profile,
                         original_filename=filename,
-                        status='uploaded', # Initial status after upload
+                        status='completed', # Changed from 'uploaded' to 'completed'
                         timestamp=datetime.now(),
                         cloudinary_url=cloudinary_url,
-                        video_metadata=upload_result, # Store full Cloudinary response
+                        video_metadata=upload_result, 
                         message='Video successfully uploaded to Cloudinary and full metadata obtained.'
                     )
                     session.add(new_task)
-                    existing_task = new_task # For returning in jsonify
+                    existing_task = new_task 
                 session.commit()
                 print(f"[{full_public_id}] DB changes successfully committed.")
-                # Corrected: Return metadata in response
                 return jsonify({'message': 'Video uploaded and task created/updated', 'taskId': existing_task.task_id, 'cloudinary_url': cloudinary_url, 'metadata': existing_task.video_metadata, 'originalFilename': existing_task.original_filename}), 200
             else:
                 print(f"[{full_public_id}] Cloudinary upload failed: secure_url missing in response.")
                 return jsonify({'error': 'Cloudinary upload failed'}), 500
 
     except SQLAlchemyError as e:
-        session.rollback() # Rollback DB changes in case of error
+        session.rollback() 
         print(f"[{full_public_id if 'full_public_id' in locals() else 'N/A'}] Database error: {e}")
         print(f"Original error info: {e.orig.pginfo if hasattr(e.orig, 'pginfo') else 'N/A'}")
         return jsonify({'error': 'Database error', 'details': str(e)}), 500
     except Exception as e:
-        session.rollback() # Rollback DB changes even for other exceptions
+        session.rollback() 
         print(f"[{full_public_id if 'full_public_id' in locals() else 'N/A'}] An unexpected error occurred during upload: {e}")
         return jsonify({'error': 'An unexpected error occurred', 'details': str(e)}), 500
     finally:
-        session.close() # Ensure session is closed
+        session.close() 
 
 @app.route('/task-status/<path:task_id>', methods=['GET'])
 def get_task_status(task_id):
-    session = Session() # SQLAlchemy session created inside the endpoint
+    session = Session() 
     try:
         print(f"\n[STATUS] Received status request for task_id: '{task_id}'")
-        task_info = session.query(Task).filter_by(task_id=task_id).first() # SEARCH BY task_id
+        task_info = session.query(Task).filter_by(task_id=task_id).first() 
         if task_info:
             print(f"[STATUS] Task found in DB: {task_info.task_id}, status: {task_info.status}")
             return jsonify(task_info.to_dict()), 200
@@ -278,7 +277,7 @@ def get_task_status(task_id):
             print(f"[STATUS] Task with task_id '{task_id}' NOT FOUND in DB.")
             return jsonify({"message": "Task not found."}), 404
     finally:
-        session.close() # Ensure session is closed
+        session.close() 
 
 @app.route('/heavy-tasks/pending', methods=['GET'])
 def get_heavy_tasks():
@@ -291,7 +290,7 @@ def concatenate_videos():
     session = Session()
     try:
         data = request.get_json()
-        public_ids_from_frontend = data.get('public_ids') # These will be full paths (task_id)
+        public_ids_from_frontend = data.get('public_ids') 
 
         if not public_ids_from_frontend or not isinstance(public_ids_from_frontend, list) or len(public_ids_from_frontend) < 2:
             print("[CONCAT] Concatenation request received with less than 2 public_ids.")
@@ -306,22 +305,18 @@ def concatenate_videos():
         for i, public_id_full_path in enumerate(public_ids_from_frontend):
             print(f"[CONCAT] Getting metadata for video: {public_id_full_path}")
             try:
-                # Corrected: public_id_full_path is used to get the resource
                 resource = cloudinary.api.resource(public_id_full_path, resource_type="video")
                 duration = resource.get('duration', 0)
                 print(f"[CONCAT] Duration for {public_id_full_path}: {duration} seconds.")
 
                 if i == 0:
-                    # First video is the base, no overlay or offset
-                    # Add codec transformation for compatibility
                     transformations.append({"video_codec": "auto"})
                 else:
-                    # Subsequent videos are added as overlays with 'splice' flag and start_offset
                     transformations.append({
-                        "overlay": public_id_full_path, # Corrected: Use full path for overlay
+                        "overlay": public_id_full_path, 
                         "flag": "splice",
-                        "start_offset": f"{current_duration:.2f}", # Use current total duration as start_offset
-                        "resource_type": "video" # Specify that overlay is a video
+                        "start_offset": f"{current_duration:.2f}", 
+                        "resource_type": "video" 
                     })
                 current_duration += duration
             except cloudinary.api.NotFound:
@@ -332,40 +327,32 @@ def concatenate_videos():
                 return jsonify({'error': f'Error getting metadata for {public_id_full_path}: {str(e)}'}), 500
 
         # Step 2: Generate URL for the concatenated video
-        # Corrected: base_public_id will now be the full path of the first video
         base_public_id_for_concat = public_ids_from_frontend[0] 
         print(f"[CONCAT] Base public_id for concatenation: {base_public_id_for_concat}")
         print(f"[CONCAT] Generated transformations: {transformations}")
 
-        # Create a unique public_id for the new concatenated video
-        # Corrected: task_id for concatenated video will be a unique hash
         concat_unique_string = f"concatenated-{'-'.join(public_ids_from_frontend)}-{time.time()}-{os.urandom(4).hex()}"
         new_concatenated_task_id = hashlib.sha256(concat_unique_string.encode()).hexdigest()[:20]
         new_filename = f"concatenated_video_{new_concatenated_task_id}.mp4"
 
-        # Generate a temporary URL with transformations, which will then be "uploaded"
-        # Corrected: Use base_public_id_for_concat, which is the full path
         concatenated_temp_url = cloudinary.utils.cloudinary_url(
-            base_public_id_for_concat, # Use full public_id of the first video as base
+            base_public_id_for_concat, 
             resource_type="video",
             transformation=transformations,
             format="mp4",
             fetch_format="auto",
             quality="auto",
-            type="upload" # Important: type="upload" to generate a URL that can be uploaded
+            type="upload" 
         )[0]
         print(f"[CONCAT] Generated temporary URL for concatenated video: {concatenated_temp_url}")
 
         # Step 3: Upload the concatenated video (using its generated URL)
-        # Corrected: Define folder for concatenated videos. Can use the folder of the first video.
-        # For simplicity, let's create a separate folder "hife_video_analysis/concatenated".
-        # If you want it in the user's folder, you'll need to extract the username from base_public_id_for_concat.
         concat_folder = "hife_video_analysis/concatenated"
         print(f"[CONCAT] Uploading concatenated video to Cloudinary with new public_id: {new_concatenated_task_id} in folder {concat_folder}")
         upload_result = cloudinary.uploader.upload(
             concatenated_temp_url,
             resource_type="video",
-            folder=concat_folder, # Corrected: Upload to a separate folder for concatenated videos
+            folder=concat_folder, 
             public_id=new_concatenated_task_id, 
             unique_filename=False,
             overwrite=True,
@@ -378,25 +365,24 @@ def concatenate_videos():
             new_video_url = upload_result['secure_url']
             print(f"[CONCAT] New URL for concatenated video: {new_video_url}")
 
-            # Save information about the new concatenated video to the database
             new_task = Task(
-                task_id=f"{concat_folder}/{new_concatenated_task_id}", # Corrected: task_id is now the full path
-                instagram_username="N/A", # Can be extended to take from first video or request
+                task_id=f"{concat_folder}/{new_concatenated_task_id}", 
+                instagram_username="N/A", 
                 email="N/A",
                 linkedin_profile="N/A",
                 original_filename=new_filename,
-                status='concatenated', # New status for concatenated videos
+                status='concatenated', 
                 timestamp=datetime.now(),
                 cloudinary_url=new_video_url,
-                video_metadata=upload_result # Store full metadata of concatenated video
+                video_metadata=upload_result 
             )
             session.add(new_task)
             session.commit()
-            print(f"[CONCAT] Task for concatenated video saved to DB with ID: {new_task.task_id}") # Corrected: new_task.task_id
+            print(f"[CONCAT] Task for concatenated video saved to DB with ID: {new_task.task_id}") 
 
             return jsonify({
                 'message': 'Videos successfully concatenated',
-                'new_public_id': new_task.task_id, # Corrected: Return full task_id
+                'new_public_id': new_task.task_id, 
                 'new_video_url': new_video_url
             }), 200
         else:
