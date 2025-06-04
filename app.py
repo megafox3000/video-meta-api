@@ -16,6 +16,7 @@ app = Flask(__name__)
 CORS(app)
 
 # Cloudinary configuration
+# Убедитесь, что эти переменные окружения установлены на Render.com
 cloudinary.config(
     cloud_name = os.environ.get('CLOUDINARY_CLOUD_NAME'),
     api_key = os.environ.get('CLOUDINARY_API_KEY'),
@@ -28,7 +29,20 @@ DATABASE_URL = os.environ.get('DATABASE_URL')
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL environment variable is not set!")
 
-engine = create_engine(DATABASE_URL)
+# ====================================================================================================
+# КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Добавляем параметры SSL для подключения к PostgreSQL на Render.com
+# Render's PostgreSQL обычно требует SSL.
+# 'sslmode=require' гарантирует использование SSL-соединения.
+# Мы добавляем это через connect_args, чтобы быть уверенными, что оно применяется.
+connect_args = {}
+if DATABASE_URL.startswith("postgresql://") or DATABASE_URL.startswith("postgres://"):
+    # Проверяем, есть ли sslmode уже в URL, чтобы избежать дублирования
+    if "sslmode=" not in DATABASE_URL:
+        connect_args["sslmode"] = "require" # Или "verify-full" если требуется проверка CA сертификата
+
+engine = create_engine(DATABASE_URL, connect_args=connect_args)
+# ====================================================================================================
+
 Base = declarative_base()
 Session = sessionmaker(bind=engine)
 
@@ -287,20 +301,19 @@ def concatenate_videos():
         print(f"[CONCAT] Received concatenation request for public_ids: {public_ids_from_frontend}")
 
         video_durations = [] # Для хранения длительностей для расчета start_offset
-        all_resource_infos = [] # НОВОЕ: Для хранения полных метаданных каждого видео
+        all_resource_infos = [] # Для хранения полных метаданных каждого видео
 
         # Шаг 1: Получить метаданные для каждого видео, чтобы рассчитать длительность
         for public_id_full_path in public_ids_from_frontend:
             print(f"[CONCAT] Getting metadata for video: {public_id_full_path}")
             try:
                 resource = cloudinary.api.resource(public_id_full_path, resource_type="video")
-                all_resource_infos.append(resource) # НОВОЕ: Сохраняем полные метаданные
+                all_resource_infos.append(resource)
                 
                 duration = resource.get('duration', 0)
-                # Если длительность 0, это может указывать на проблему или очень короткое видео.
                 if duration == 0:
                     print(f"[CONCAT] Warning: Video {public_id_full_path} has 0 duration. This might affect concatenation.")
-                    print(f"[CONCAT] Full Cloudinary metadata for {public_id_full_path}: {resource}") # НОВОЕ: Логируем полные метаданные
+                    print(f"[CONCAT] Full Cloudinary metadata for {public_id_full_path}: {resource}")
                 video_durations.append(duration)
                 print(f"[CONCAT] Duration for {public_id_full_path}: {duration} seconds.")
             except cloudinary.api.NotFound:
@@ -310,38 +323,32 @@ def concatenate_videos():
                 print(f"[CONCAT] Error getting metadata for {public_id_full_path}: {e}")
                 return jsonify({'error': f'Error getting metadata for {public_id_full_path}: {str(e)}'}), 500
 
-        # Новая проверка: Если все видео имеют нулевую длительность, вернуть ошибку.
         if all(d == 0 for d in video_durations):
             print("[CONCAT] All selected videos have 0 duration. Cannot concatenate meaningfully.")
             return jsonify({'error': 'Cannot concatenate: All selected videos have 0 duration. Please upload videos with actual content.'}), 400
 
         # Шаг 2: Создать список трансформаций для Cloudinary upload
         transformations = []
-        # Глобальные настройки для выходного объединенного видео
         transformations.append({"video_codec": "auto", "format": "mp4", "quality": "auto"})
 
-        # Добавить наложения для последующих видео с использованием флага 'splice'
         current_offset_duration = 0
         for i, public_id_full_path in enumerate(public_ids_from_frontend):
             if i == 0:
-                # Первое видео является базой, его public_id передается напрямую в upload.
-                # Его длительность просто добавляется к смещению для следующего видео.
                 current_offset_duration += video_durations[i]
-                continue # Пропускаем добавление его как overlay
+                continue
 
             transformations.append({
-                "overlay": public_id_full_path, # Public ID видео для наложения
-                "flag": "splice", # Флаг для конкатенации
-                "start_offset": f"{current_offset_duration:.2f}", # Начать после предыдущих видео
-                "resource_type": "video" # Указать тип ресурса для наложения
+                "overlay": public_id_full_path,
+                "flag": "splice",
+                "start_offset": f"{current_offset_duration:.2f}",
+                "resource_type": "video"
             })
-            current_offset_duration += video_durations[i] # Добавить длительность текущего видео для следующего смещения
+            current_offset_duration += video_durations[i]
 
         print(f"[CONCAT] Generated transformations: {transformations}")
 
         # Шаг 3: Загрузить объединенное видео напрямую, используя public_id первого видео в качестве основы
         concat_folder = "hife_video_analysis/concatenated"
-        # Сгенерировать уникальный public_id для нового объединенного видео
         concat_unique_string = f"concatenated-{'_'.join(public_ids_from_frontend)}-{time.time()}"
         new_concatenated_base_id = hashlib.sha256(concat_unique_string.encode()).hexdigest()[:20]
         new_concatenated_full_public_id = f"{concat_folder}/{new_concatenated_base_id}"
@@ -350,13 +357,13 @@ def concatenate_videos():
         print(f"[CONCAT] Uploading concatenated video to Cloudinary with new public_id: {new_concatenated_full_public_id}")
 
         upload_result = cloudinary.uploader.upload(
-            public_ids_from_frontend[0], # Public ID первого видео выступает в качестве основы
+            public_ids_from_frontend[0],
             resource_type="video",
             folder=concat_folder,
             public_id=new_concatenated_base_id,
             unique_filename=False,
             overwrite=True,
-            transformation=transformations # Передаем весь список трансформаций сюда
+            transformation=transformations
         )
         print(f"[CONCAT] Result of concatenated video upload to Cloudinary: {upload_result}")
 
@@ -366,7 +373,7 @@ def concatenate_videos():
 
             new_task = Task(
                 task_id=new_concatenated_full_public_id,
-                instagram_username=request.form.get('instagram_username', 'concatenated'), # Заполнитель
+                instagram_username=request.form.get('instagram_username', 'concatenated'),
                 email=request.form.get('email', 'concatenated@example.com'),
                 linkedin_profile=request.form.get('linkedin_profile', 'N/A'),
                 original_filename=new_filename,
