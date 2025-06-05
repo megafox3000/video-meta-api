@@ -320,7 +320,7 @@ def concatenate_videos():
         base_video_url = None 
         
         # Получаем метаданные из нашей БД и собираем URL для наложений
-        video_urls_for_overlays = [] # NEW: Список URL для использования в overlay
+        video_public_ids_for_overlays = [] # ИЗМЕНЕНО: Список Public ID для использования в overlay
         for i, public_id_full_path in enumerate(public_ids_from_frontend):
             print(f"[CONCAT] Getting metadata from DB for video: {public_id_full_path}")
             db_task = session.query(Task).filter_by(task_id=public_id_full_path).first()
@@ -343,8 +343,8 @@ def concatenate_videos():
             if i == 0:
                 base_video_url = db_task.cloudinary_url
             
-            # Добавляем URL каждого видео в список для наложений
-            video_urls_for_overlays.append(db_task.cloudinary_url)
+            # Добавляем Public ID каждого видео в список для наложений
+            video_public_ids_for_overlays.append(public_id_full_path) # ИЗМЕНЕНО: Теперь добавляем public_id_full_path
 
 
         # Шаг 2: Создать список трансформаций для Cloudinary upload
@@ -352,13 +352,13 @@ def concatenate_videos():
         transformations.append({"video_codec": "auto", "format": "mp4", "quality": "auto"})
 
         current_offset_duration = 0
-        for i, video_url_for_overlay in enumerate(video_urls_for_overlays): # Используем список URL
+        for i, public_id_for_overlay in enumerate(video_public_ids_for_overlays): # ИЗМЕНЕНО: Используем список Public ID
             if i == 0:
                 current_offset_duration += video_durations[i]
                 continue
 
             transformations.append({
-                "overlay": video_url_for_overlay, # <--- ИСПРАВЛЕНО: Теперь передаем полный URL Cloudinary для overlay
+                "overlay": public_id_for_overlay, # <--- ИСПРАВЛЕНО: Теперь передаем Public ID для overlay
                 "flag": "splice",
                 "start_offset": f"{current_offset_duration:.2f}",
             })
