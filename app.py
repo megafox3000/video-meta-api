@@ -351,8 +351,9 @@ def concatenate_videos():
                 current_offset_duration += video_durations[i]
                 continue
 
+            # ИСПРАВЛЕНО: Возвращаем Public ID как строку для overlay
             transformations.append({
-                "overlay": {"public_id": public_id_for_overlay, "resource_type": "video"},
+                "overlay": public_id_for_overlay, # <-- ИСПРАВЛЕНО: Просто Public ID строка
                 "flag": "splice",
                 "start_offset": f"{current_offset_duration:.2f}",
             })
