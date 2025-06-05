@@ -319,7 +319,8 @@ def concatenate_videos():
         video_durations = []
         base_video_url = None 
         
-        # Получаем метаданные из нашей БД
+        # Получаем метаданные из нашей БД и собираем URL для наложений
+        video_urls_for_overlays = [] # NEW: Список URL для использования в overlay
         for i, public_id_full_path in enumerate(public_ids_from_frontend):
             print(f"[CONCAT] Getting metadata from DB for video: {public_id_full_path}")
             db_task = session.query(Task).filter_by(task_id=public_id_full_path).first()
@@ -338,9 +339,12 @@ def concatenate_videos():
             video_durations.append(duration)
             print(f"[CONCAT] Duration for {public_id_full_path} from DB: {duration} seconds.")
 
-            # Store the Cloudinary URL of the first video to use as the base for upload()
+            # Сохраняем URL первого видео для использования в качестве базы для upload()
             if i == 0:
                 base_video_url = db_task.cloudinary_url
+            
+            # Добавляем URL каждого видео в список для наложений
+            video_urls_for_overlays.append(db_task.cloudinary_url)
 
 
         # Шаг 2: Создать список трансформаций для Cloudinary upload
@@ -348,18 +352,15 @@ def concatenate_videos():
         transformations.append({"video_codec": "auto", "format": "mp4", "quality": "auto"})
 
         current_offset_duration = 0
-        for i, public_id_full_path in enumerate(public_ids_from_frontend):
+        for i, video_url_for_overlay in enumerate(video_urls_for_overlays): # Используем список URL
             if i == 0:
                 current_offset_duration += video_durations[i]
                 continue
 
             transformations.append({
-                "overlay": public_id_full_path,
+                "overlay": video_url_for_overlay, # <--- ИСПРАВЛЕНО: Теперь передаем полный URL Cloudinary для overlay
                 "flag": "splice",
                 "start_offset": f"{current_offset_duration:.2f}",
-                # ИСПРАВЛЕНИЕ ЗДЕСЬ: Удаляем 'resource_type': 'video'
-                # Cloudinary определит тип по public_id или по верхнему уровню.
-                # "resource_type": "video" 
             })
             current_offset_duration += video_durations[i]
 
