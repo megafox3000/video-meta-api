@@ -164,65 +164,111 @@ def upload_video():
 
         existing_task = session.query(Task).filter_by(task_id=full_public_id).first()
 
+        should_reupload = False
+        cloudinary_resource_info = None
+
         if existing_task:
-            # ОПТИМИЗАЦИЯ: Если задача уже существует в нашей БД,
-            # предполагаем, что она содержит полные метаданные (включая duration)
-            # и не делаем запрос к Cloudinary и не перезагружаем файл.
-            print(f"[{full_public_id}] Task with task_id '{full_public_id}' already exists in DB. Skipping re-upload to Cloudinary.")
-            # Обновляем пользовательские данные, если они могли измениться
-            existing_task.instagram_username = instagram_username
-            existing_task.email = email
-            existing_task.linkedin_profile = linkedin_profile
-            session.commit()
-            return jsonify({
-                'message': 'Video already exists, info confirmed/updated.',
-                'taskId': existing_task.task_id,
-                'cloudinary_url': existing_task.cloudinary_url,
-                'originalFilename': existing_task.original_filename,
-                'metadata': existing_task.video_metadata,
-                'status': existing_task.status
-            }), 200
+            print(f"[{full_public_id}] Task with task_id '{full_public_id}' found in DB. Checking Cloudinary for full metadata...")
+            try:
+                # Попытка получить свежие метаданные из Cloudinary
+                cloudinary_resource_info = cloudinary.api.resource(full_public_id, resource_type="video")
+                
+                # Проверяем, есть ли duration и что оно не равно 0
+                if cloudinary_resource_info and cloudinary_resource_info.get('duration', 0) > 0:
+                    print(f"[{full_public_id}] Cloudinary resource found with valid duration. Updating DB.")
+                    # Обновляем нашу БД свежими данными от Cloudinary
+                    existing_task.cloudinary_url = cloudinary_resource_info.get('secure_url')
+                    existing_task.video_metadata = cloudinary_resource_info
+                    existing_task.status = 'completed'
+                    existing_task.message = 'Video found on Cloudinary with valid metadata. DB info updated.'
+                    existing_task.timestamp = datetime.now()
+                    existing_task.instagram_username = instagram_username # Обновляем пользовательские данные
+                    existing_task.email = email
+                    existing_task.linkedin_profile = linkedin_profile
+                    session.commit()
+                    return jsonify({
+                        'message': 'Video info updated from Cloudinary.',
+                        'taskId': existing_task.task_id,
+                        'cloudinary_url': existing_task.cloudinary_url,
+                        'originalFilename': existing_task.original_filename,
+                        'metadata': existing_task.video_metadata,
+                        'status': existing_task.status
+                    }), 200
+                else:
+                    # Ресурс найден на Cloudinary, но duration некорректно
+                    print(f"[{full_public_id}] Cloudinary resource found but duration is 0 or missing. Forcing re-upload.")
+                    should_reupload = True
+            except cloudinary.api.NotFound:
+                # Ресурс не найден на Cloudinary, хотя есть в нашей БД
+                print(f"[{full_public_id}] Cloudinary resource NOT found despite DB record. Forcing re-upload.")
+                should_reupload = True
+            except Exception as e:
+                # Другая ошибка при запросе к Cloudinary
+                print(f"[{full_public_id}] Error checking Cloudinary resource: {e}. Forcing re-upload.")
+                should_reupload = True
         else:
-            # Если задача не существует в нашей БД, загружаем файл в Cloudinary
-            # (это заставит Cloudinary обработать его и вернуть полные метаданные)
-            print(f"[{full_public_id}] Task not found in DB. Uploading new video to Cloudinary...")
+            # Задачи нет в нашей БД, это новая загрузка
+            print(f"[{full_public_id}] Task not found in DB. This is a new upload.")
+            should_reupload = True
+        
+        # Если should_reupload = True (файл не найден в БД, или найден, но нет на Cloudinary,
+        # или есть, но метаданные некорректны), выполняем загрузку
+        if should_reupload:
+            print(f"[{full_public_id}] Uploading/re-uploading video to Cloudinary to ensure full metadata...")
             upload_result = cloudinary.uploader.upload(
                 file,
                 resource_type="video",
                 folder=f"hife_video_analysis/{cleaned_username}",
                 public_id=original_filename_base,
                 unique_filename=False,
-                overwrite=True, # Важно, чтобы всегда получать актуальные метаданные при первой загрузке
+                overwrite=True, # Обязательно для обновления метаданных
                 quality="auto",
                 format="mp4",
                 tags=["hife_analysis", cleaned_username]
             )
-            print(f"[{full_public_id}] Cloudinary response after new upload: {upload_result}")
+            print(f"[{full_public_id}] Cloudinary response after upload: {upload_result}")
 
             if upload_result and upload_result.get('secure_url'):
                 cloudinary_url = upload_result['secure_url']
                 print(f"[{full_public_id}] Cloudinary URL: {cloudinary_url}")
 
-                # Создаем новую задачу в БД
-                new_task = Task(
-                    task_id=full_public_id,
-                    instagram_username=instagram_username,
-                    email=email,
-                    linkedin_profile=linkedin_profile,
-                    original_filename=filename,
-                    status='completed',
-                    timestamp=datetime.now(),
-                    cloudinary_url=cloudinary_url,
-                    video_metadata=upload_result,
-                    message='Video successfully uploaded to Cloudinary and full metadata obtained.'
-                )
-                session.add(new_task)
+                if existing_task:
+                    print(f"[{full_public_id}] Updating existing task in DB after re-upload.")
+                    existing_task.instagram_username = instagram_username
+                    existing_task.email = email
+                    existing_task.linkedin_profile = linkedin_profile
+                    existing_task.original_filename = filename
+                    existing_task.status = 'completed'
+                    existing_task.timestamp = datetime.now()
+                    existing_task.cloudinary_url = cloudinary_url
+                    existing_task.video_metadata = upload_result # Обновляем метаданные из нового ответа
+                    existing_task.message = 'Video re-uploaded to Cloudinary and DB info updated.'
+                else:
+                    print(f"[{full_public_id}] Creating a new task in DB after upload.")
+                    new_task = Task(
+                        task_id=full_public_id,
+                        instagram_username=instagram_username,
+                        email=email,
+                        linkedin_profile=linkedin_profile,
+                        original_filename=filename,
+                        status='completed',
+                        timestamp=datetime.now(),
+                        cloudinary_url=cloudinary_url,
+                        video_metadata=upload_result,
+                        message='Video successfully uploaded to Cloudinary and full metadata obtained.'
+                    )
+                    session.add(new_task)
+                    existing_task = new_task # Для единообразия возвращаемого значения
                 session.commit()
-                print(f"[{full_public_id}] New task successfully committed to DB.")
-                return jsonify({'message': 'Video uploaded and task created', 'taskId': new_task.task_id, 'cloudinary_url': cloudinary_url, 'metadata': new_task.video_metadata, 'originalFilename': new_task.original_filename}), 200
+                print(f"[{full_public_id}] DB changes successfully committed.")
+                return jsonify({'message': 'Video uploaded and task created/updated', 'taskId': existing_task.task_id, 'cloudinary_url': cloudinary_url, 'metadata': existing_task.video_metadata, 'originalFilename': existing_task.original_filename}), 200
             else:
                 print(f"[{full_public_id}] Cloudinary upload failed: secure_url missing in response.")
                 return jsonify({'error': 'Cloudinary upload failed'}), 500
+        else:
+            # Этот блок не должен быть достигнут, если логика верна, но для безопасности
+            print(f"[{full_public_id}] Unexpected state: should_reupload was False, but no return was made. This indicates a logic error.")
+            return jsonify({'error': 'Internal server logic error'}), 500
 
     except SQLAlchemyError as e:
         session.rollback()
@@ -271,7 +317,7 @@ def concatenate_videos():
         print(f"[CONCAT] Received concatenation request for public_ids: {public_ids_from_frontend}")
 
         video_durations = []
-        # Вместо запроса к Cloudinary, получаем метаданные из нашей БД
+        # Получаем метаданные из нашей БД
         for public_id_full_path in public_ids_from_frontend:
             print(f"[CONCAT] Getting metadata from DB for video: {public_id_full_path}")
             db_task = session.query(Task).filter_by(task_id=public_id_full_path).first()
@@ -280,19 +326,20 @@ def concatenate_videos():
                 print(f"[CONCAT] Error: Video with public_id {public_id_full_path} not found in local DB.")
                 return jsonify({'error': f'Video with public_id {public_id_full_path} not found in DB. Please ensure it was uploaded successfully.'}), 404
             
-            # Проверяем наличие duration в metadata
+            # Проверяем наличие duration и что оно больше 0
             duration = db_task.video_metadata.get('duration', 0)
-            if duration == 0:
-                print(f"[CONCAT] Warning: Video {public_id_full_path} has 0 duration in DB metadata. This might affect concatenation.")
-                # Логируем полные метаданные из БД для отладки
+            if duration <= 0: # Изменено на <= 0
+                print(f"[CONCAT] Warning: Video {public_id_full_path} has 0 duration in DB metadata. Cannot concatenate meaningfully.")
                 print(f"[CONCAT] Full DB metadata for {public_id_full_path}: {db_task.video_metadata}") 
+                return jsonify({'error': f'Cannot concatenate: Video {public_id_full_path} has zero or invalid duration in DB. Please re-upload it.'}), 400 # Возвращаем ошибку, если duration 0
             
             video_durations.append(duration)
             print(f"[CONCAT] Duration for {public_id_full_path} from DB: {duration} seconds.")
 
-        if all(d == 0 for d in video_durations):
-            print("[CONCAT] All selected videos have 0 duration from DB. Cannot concatenate meaningfully.")
-            return jsonify({'error': 'Cannot concatenate: All selected videos have 0 duration. Please upload videos with actual content.'}), 400
+        # Убираем эту проверку, так как теперь мы уже проверяем каждый видеофайл индивидуально выше.
+        # if all(d == 0 for d in video_durations):
+        #     print("[CONCAT] All selected videos have 0 duration from DB. Cannot concatenate meaningfully.")
+        #     return jsonify({'error': 'Cannot concatenate: All selected videos have 0 duration. Please upload videos with actual content.'}), 400
 
         # Шаг 2: Создать список трансформаций для Cloudinary upload
         transformations = []
