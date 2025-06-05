@@ -344,8 +344,8 @@ def concatenate_videos():
             
         # Шаг 2: Создать список трансформаций для Cloudinary upload
         transformations = []
-        # Первая трансформация (которая применяется к базовому видео)
-        transformations.append({"video_codec": "auto", "format": "mp4", "quality": "auto"})
+        # Теперь первый элемент в transformations - это overlay для второго видео (и далее)
+        # Параметры video_codec, format, quality перемещены на верхний уровень upload()
 
         current_offset_duration = 0
         for i, public_id_for_overlay in enumerate(public_ids_from_frontend): 
@@ -353,7 +353,6 @@ def concatenate_videos():
                 current_offset_duration += video_durations[i]
                 continue
 
-            # ИСПРАВЛЕНО: Явная передача словаря для overlay
             transformations.append({
                 "overlay": {"public_id": public_id_for_overlay, "resource_type": "video"},
                 "flag": "splice",
@@ -363,7 +362,7 @@ def concatenate_videos():
 
         print(f"[CONCAT] Generated transformations: {transformations}")
 
-        # Шаг 3: Загрузить объединенное видео напрямую, используя public_id первого видео в качестве основы
+        # Шаг 3: Загрузить объединенное видео напрямую, используя URL первого видео в качестве основы
         concat_folder = "hife_video_analysis/concatenated"
         concat_unique_string = f"concatenated-{'_'.join(public_ids_from_frontend)}-{time.time()}"
         new_concatenated_base_id = hashlib.sha256(concat_unique_string.encode()).hexdigest()[:20]
@@ -374,12 +373,15 @@ def concatenate_videos():
 
         upload_result = cloudinary.uploader.upload(
             base_video_url, # <--- Передаем URL Cloudinary в качестве базового источника
-            resource_type="video", # Убедимся, что это указано на верхнем уровне
+            resource_type="video", # Указываем тип ресурса на верхнем уровне
             folder=concat_folder,
             public_id=new_concatenated_base_id,
             unique_filename=False,
             overwrite=True,
-            transformation=transformations
+            transformation=transformations, # Список трансформаций теперь содержит только splice overlay
+            video_codec="auto", # <--- Перемещено сюда
+            format="mp4",       # <--- Перемещено сюда
+            quality="auto"      # <--- Перемещено сюда
         )
         print(f"[CONCAT] Result of concatenated video upload to Cloudinary: {upload_result}")
 
