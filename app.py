@@ -344,16 +344,18 @@ def concatenate_videos():
             
         # Шаг 2: Создать список трансформаций для Cloudinary upload
         transformations = []
+        # Первая трансформация (которая применяется к базовому видео)
         transformations.append({"video_codec": "auto", "format": "mp4", "quality": "auto"})
 
         current_offset_duration = 0
-        for i, public_id_for_overlay in enumerate(public_ids_from_frontend): # Используем public_ids_from_frontend
+        for i, public_id_for_overlay in enumerate(public_ids_from_frontend): 
             if i == 0:
                 current_offset_duration += video_durations[i]
                 continue
 
+            # ИСПРАВЛЕНО: Явная передача словаря для overlay
             transformations.append({
-                "overlay": {"public_id": public_id_for_overlay, "resource_type": "video"}, # <--- ИСПРАВЛЕНО: Явная передача словаря для overlay
+                "overlay": {"public_id": public_id_for_overlay, "resource_type": "video"},
                 "flag": "splice",
                 "start_offset": f"{current_offset_duration:.2f}",
             })
