@@ -344,9 +344,7 @@ def concatenate_videos():
             
         # Шаг 2: Создать список трансформаций для Cloudinary upload
         transformations = []
-        # Теперь первый элемент в transformations - это overlay для второго видео (и далее)
-        # Параметры video_codec, format, quality перемещены на верхний уровень upload()
-
+        
         current_offset_duration = 0
         for i, public_id_for_overlay in enumerate(public_ids_from_frontend): 
             if i == 0:
@@ -372,16 +370,16 @@ def concatenate_videos():
         print(f"[CONCAT] Uploading concatenated video to Cloudinary with new public_id: {new_concatenated_full_public_id}")
 
         upload_result = cloudinary.uploader.upload(
-            base_video_url, # <--- Передаем URL Cloudinary в качестве базового источника
-            resource_type="video", # Указываем тип ресурса на верхнем уровне
+            base_video_url, 
+            resource_type="video", 
             folder=concat_folder,
             public_id=new_concatenated_base_id,
             unique_filename=False,
             overwrite=True,
-            transformation=transformations, # Список трансформаций теперь содержит только splice overlay
-            video_codec="auto", # <--- Перемещено сюда
-            format="mp4",       # <--- Перемещено сюда
-            quality="auto"      # <--- Перемещено сюда
+            transformation=transformations, 
+            video_codec="auto", 
+            format="mp4",       
+            quality="auto"      
         )
         print(f"[CONCAT] Result of concatenated video upload to Cloudinary: {upload_result}")
 
