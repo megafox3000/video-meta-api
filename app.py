@@ -226,7 +226,7 @@ def upload_video():
                 format="mp4",
                 tags=["hife_analysis", cleaned_username]
             )
-            print(f"[{full_public_id}] Cloudinary response after upload: {upload_result}")
+            print(f"[{full_public_id}] Cloudinary response after new upload: {upload_result}")
 
             if upload_result and upload_result.get('secure_url'):
                 cloudinary_url = upload_result['secure_url']
@@ -317,8 +317,10 @@ def concatenate_videos():
         print(f"[CONCAT] Received concatenation request for public_ids: {public_ids_from_frontend}")
 
         video_durations = []
+        base_video_url = None # NEW: To store the Cloudinary URL of the first video
+        
         # Получаем метаданные из нашей БД
-        for public_id_full_path in public_ids_from_frontend:
+        for i, public_id_full_path in enumerate(public_ids_from_frontend):
             print(f"[CONCAT] Getting metadata from DB for video: {public_id_full_path}")
             db_task = session.query(Task).filter_by(task_id=public_id_full_path).first()
 
@@ -328,18 +330,18 @@ def concatenate_videos():
             
             # Проверяем наличие duration и что оно больше 0
             duration = db_task.video_metadata.get('duration', 0)
-            if duration <= 0: # Изменено на <= 0
+            if duration <= 0:
                 print(f"[CONCAT] Warning: Video {public_id_full_path} has 0 duration in DB metadata. Cannot concatenate meaningfully.")
                 print(f"[CONCAT] Full DB metadata for {public_id_full_path}: {db_task.video_metadata}") 
-                return jsonify({'error': f'Cannot concatenate: Video {public_id_full_path} has zero or invalid duration in DB. Please re-upload it.'}), 400 # Возвращаем ошибку, если duration 0
+                return jsonify({'error': f'Cannot concatenate: Video {public_id_full_path} has zero or invalid duration in DB. Please re-upload it.'}), 400
             
             video_durations.append(duration)
             print(f"[CONCAT] Duration for {public_id_full_path} from DB: {duration} seconds.")
 
-        # Убираем эту проверку, так как теперь мы уже проверяем каждый видеофайл индивидуально выше.
-        # if all(d == 0 for d in video_durations):
-        #     print("[CONCAT] All selected videos have 0 duration from DB. Cannot concatenate meaningfully.")
-        #     return jsonify({'error': 'Cannot concatenate: All selected videos have 0 duration. Please upload videos with actual content.'}), 400
+            # Store the Cloudinary URL of the first video to use as the base for upload()
+            if i == 0:
+                base_video_url = db_task.cloudinary_url
+
 
         # Шаг 2: Создать список трансформаций для Cloudinary upload
         transformations = []
@@ -370,9 +372,10 @@ def concatenate_videos():
 
         print(f"[CONCAT] Uploading concatenated video to Cloudinary with new public_id: {new_concatenated_full_public_id}")
 
-        # В upload() мы используем public_id_from_frontend[0] - это ссылка на уже загруженный ресурс
+        # ИСПРАВЛЕНИЕ ЗДЕСЬ: Используем Cloudinary URL первого видео как источник
+        # This tells Cloudinary to use an already hosted asset as the base for transformations
         upload_result = cloudinary.uploader.upload(
-            public_ids_from_frontend[0],
+            base_video_url, # <--- ИСПРАВЛЕНО: Теперь передаем URL Cloudinary
             resource_type="video",
             folder=concat_folder,
             public_id=new_concatenated_base_id,
