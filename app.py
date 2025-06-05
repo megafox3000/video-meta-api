@@ -317,7 +317,7 @@ def concatenate_videos():
         print(f"[CONCAT] Received concatenation request for public_ids: {public_ids_from_frontend}")
 
         video_durations = []
-        base_video_url = None # NEW: To store the Cloudinary URL of the first video
+        base_video_url = None 
         
         # Получаем метаданные из нашей БД
         for i, public_id_full_path in enumerate(public_ids_from_frontend):
@@ -333,7 +333,7 @@ def concatenate_videos():
             if duration <= 0:
                 print(f"[CONCAT] Warning: Video {public_id_full_path} has 0 duration in DB metadata. Cannot concatenate meaningfully.")
                 print(f"[CONCAT] Full DB metadata for {public_id_full_path}: {db_task.video_metadata}") 
-                return jsonify({'error': f'Cannot concatenate: Video {public_id_full_path} has zero or invalid duration in DB. Please re-upload it.'}), 400
+                return jsonify({'error': f'Cannot concatenate: Video {public_id_full_path} has zero or invalid duration in DB. Please re-upload it.'}), 400 
             
             video_durations.append(duration)
             print(f"[CONCAT] Duration for {public_id_full_path} from DB: {duration} seconds.")
@@ -357,7 +357,9 @@ def concatenate_videos():
                 "overlay": public_id_full_path,
                 "flag": "splice",
                 "start_offset": f"{current_offset_duration:.2f}",
-                "resource_type": "video"
+                # ИСПРАВЛЕНИЕ ЗДЕСЬ: Удаляем 'resource_type': 'video'
+                # Cloudinary определит тип по public_id или по верхнему уровню.
+                # "resource_type": "video" 
             })
             current_offset_duration += video_durations[i]
 
@@ -372,11 +374,9 @@ def concatenate_videos():
 
         print(f"[CONCAT] Uploading concatenated video to Cloudinary with new public_id: {new_concatenated_full_public_id}")
 
-        # ИСПРАВЛЕНИЕ ЗДЕСЬ: Используем Cloudinary URL первого видео как источник
-        # This tells Cloudinary to use an already hosted asset as the base for transformations
         upload_result = cloudinary.uploader.upload(
-            base_video_url, # <--- ИСПРАВЛЕНО: Теперь передаем URL Cloudinary
-            resource_type="video",
+            base_video_url, # <--- Передаем URL Cloudinary в качестве базового источника
+            resource_type="video", # Убедимся, что это указано на верхнем уровне
             folder=concat_folder,
             public_id=new_concatenated_base_id,
             unique_filename=False,
