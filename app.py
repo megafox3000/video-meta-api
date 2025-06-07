@@ -11,6 +11,7 @@ from datetime import datetime
 import hashlib
 import time
 import requests
+import shotstack_service # <-- НОВЫЙ ИМПОРТ
 
 app = Flask(__name__)
 CORS(app)
@@ -53,6 +54,10 @@ class Task(Base):
     video_metadata = Column(JSON)
     message = Column(Text)
     timestamp = Column(DateTime, default=datetime.now)
+    # --- НОВЫЕ ПОЛЯ ДЛЯ SHOTSTACK ---
+    shotstackRenderId = Column(String) # ID, который Shotstack возвращает после запуска рендера
+    shotstackUrl = Column(String)     # Итоговый URL сгенерированного видео от Shotstack
+    # --- КОНЕЦ НОВЫХ ПОЛЕЙ ---
 
     def __repr__(self):
         return f"<Task(task_id='{self.task_id}', status='{self.status}')>"
@@ -68,7 +73,9 @@ class Task(Base):
             "cloudinary_url": self.cloudinary_url,
             "metadata": self.video_metadata,
             "message": self.message,
-            "timestamp": self.timestamp.isoformat() if self.timestamp else None
+            "timestamp": self.timestamp.isoformat() if self.timestamp else None,
+            "shotstackRenderId": self.shotstackRenderId, # Добавляем в словарь
+            "shotstackUrl": self.shotstackUrl          # Добавляем в словарь
         }
 
 def create_tables():
@@ -347,12 +354,122 @@ def get_task_status(task_id):
     try:
         print(f"\n[STATUS] Received status request for task_id: '{task_id}'")
         task_info = session.query(Task).filter_by(task_id=task_id).first()
-        if task_info:
-            print(f"[STATUS] Task found in DB: {task_info.task_id}, status: {task_info.status}")
-            return jsonify(task_info.to_dict()), 200
-        else:
+
+        if not task_info:
             print(f"[STATUS] Task with task_id '{task_id}' NOT FOUND in DB.")
             return jsonify({"message": "Task not found."}), 404
+
+        # Если статус задачи в нашей БД связан с Shotstack и она еще не завершена
+        if task_info.status == 'shotstack_pending' and task_info.shotstackRenderId:
+            print(f"[STATUS] Task {task_info.task_id} is in 'shotstack_pending' status. Checking Shotstack API...")
+            try:
+                # <-- ИСПОЛЬЗУЕМ ФУНКЦИЮ ИЗ shotstack_service -->
+                status_info = shotstack_service.get_shotstack_render_status(task_info.shotstackRenderId)
+
+                shotstack_status = status_info['status']
+                shotstack_url = status_info['url']
+                shotstack_error_message = status_info['error_message']
+
+                print(f"[STATUS] Shotstack render status for {task_info.shotstackRenderId}: {shotstack_status}")
+
+                if shotstack_status == 'done' and shotstack_url:
+                    task_info.status = 'completed' # Или 'shotstack_completed' если хотите отдельный статус
+                    task_info.shotstackUrl = shotstack_url
+                    task_info.message = "Shotstack video rendered successfully."
+                    session.commit()
+                    print(f"[STATUS] Shotstack render completed for {task_id}. URL: {shotstack_url}")
+                elif shotstack_status in ['failed', 'error']: # Пример статусов ошибок Shotstack
+                    task_info.status = 'failed'
+                    task_info.message = f"Shotstack rendering failed: {shotstack_error_message or 'Unknown Shotstack error'}"
+                    session.commit()
+                    print(f"[STATUS] Shotstack render failed for {task_id}. Error: {task_info.message}")
+                else:
+                    # Рендеринг еще в процессе, ничего не меняем в task_info.status
+                    task_info.message = f"Shotstack render in progress: {shotstack_status}"
+                    print(f"[STATUS] Shotstack render still in progress for {task_id}. Status: {shotstack_status}")
+
+            except requests.exceptions.RequestException as e:
+                print(f"[STATUS] Error querying Shotstack API for {task_info.shotstackRenderId}: {e}")
+                task_info.message = f"Error checking Shotstack status: {e}"
+                session.rollback() # Откатываем любые изменения, если ошибка при запросе к Shotstack
+            except Exception as e:
+                print(f"[STATUS] Unexpected error during Shotstack status check for {task_info.shotstackRenderId}: {e}")
+                task_info.message = f"Unexpected error during Shotstack status check: {e}"
+                session.rollback()
+
+
+        print(f"[STATUS] Task found in DB: {task_info.task_id}, current_status: {task_info.status}")
+        return jsonify(task_info.to_dict()), 200
+    except SQLAlchemyError as e:
+        session.rollback()
+        print(f"[STATUS] Database error fetching task status: {e}")
+        return jsonify({"error": "Database error", "details": str(e)}), 500
+    except Exception as e:
+        session.rollback()
+        print(f"[STATUS] An unexpected error occurred in get_task_status: {e}")
+        return jsonify({"error": "An unexpected error occurred", "details": str(e)}), 500
+    finally:
+        session.close()
+
+@app.route('/generate-shotstack-video', methods=['POST'])
+def generate_shotstack_video():
+    session = Session()
+    try:
+        data = request.get_json()
+        task_id = data.get('taskId')
+
+        if not task_id:
+            print("[SHOTSTACK] No taskId provided for Shotstack generation.")
+            return jsonify({"error": "No taskId provided"}), 400
+
+        task = session.query(Task).filter_by(task_id=task_id).first()
+        if not task:
+            print(f"[SHOTSTACK] Task {task_id} not found in DB.")
+            return jsonify({"error": "Task not found."}), 404
+
+        if not task.cloudinary_url:
+            print(f"[SHOTSTACK] Task {task_id} has no Cloudinary URL. Cannot generate Shotstack video.")
+            return jsonify({"error": "Video not uploaded to Cloudinary yet or URL missing."}), 400
+
+        # <-- ИСПОЛЬЗУЕМ ФУНКЦИЮ ИЗ shotstack_service -->
+        render_id, message = shotstack_service.initiate_shotstack_render(
+            cloudinary_video_url=task.cloudinary_url,
+            video_metadata=task.video_metadata or {}, # Передаем метаданные
+            original_filename=task.original_filename,
+            instagram_username=task.instagram_username,
+            email=task.email,
+            linkedin_profile=task.linkedin_profile
+        )
+
+        if render_id:
+            print(f"[SHOTSTACK] Shotstack render initiated for {task_id}. Render ID: {render_id}")
+            # Обновляем статус задачи в БД
+            task.status = 'shotstack_pending'
+            task.message = f"Shotstack render initiated with ID: {render_id}"
+            task.shotstackRenderId = render_id
+            session.commit()
+            return jsonify({
+                "message": "Shotstack render initiated successfully.",
+                "shotstackRenderId": render_id
+            }), 200
+        else:
+            # Этот блок, по идее, не должен быть достигнут, так как initiate_shotstack_render
+            # должен либо вернуть render_id, либо выбросить исключение.
+            print(f"[SHOTSTACK] Shotstack API did not return a render ID for task {task_id}. Unexpected.")
+            return jsonify({"error": "Failed to get Shotstack render ID. (Service issue)"}), 500
+
+    except ValueError as e:
+        session.rollback()
+        print(f"[SHOTSTACK] Validation Error during Shotstack generation for task {task_id}: {e}")
+        return jsonify({"error": str(e)}), 400
+    except requests.exceptions.RequestException as err:
+        session.rollback()
+        print(f"[SHOTSTACK] Network/API Error during Shotstack initiation for task {task_id}: {err}")
+        return jsonify({"error": f"Error communicating with Shotstack API: {err}", "details": str(err)}), 500
+    except Exception as e:
+        session.rollback()
+        print(f"[SHOTSTACK] An unexpected error occurred during Shotstack generation for task {task_id}: {e}")
+        return jsonify({"error": "An unexpected server error occurred.", "details": str(e)}), 500
     finally:
         session.close()
 
