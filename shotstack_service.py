@@ -104,7 +104,7 @@ def initiate_shotstack_render(cloudinary_video_url: str, video_metadata: dict,
     print(f"[ShotstackService] Sending request to Shotstack API for {original_filename}...")
     # print(f"Shotstack JSON: {json.dumps(shotstack_json, indent=2)}") # Для отладки
 
-    response = requests.post(f"{SHOTSTACK_RENDER_URL}/render",
+    response = requests.post(SHOTSTACK_RENDER_URL,
                              json=shotstack_json,
                              headers=_get_shotstack_headers())
     response.raise_for_status() # Вызывает исключение для 4xx/5xx ошибок
