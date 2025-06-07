@@ -2,7 +2,7 @@
 
 import os
 import requests
-import json # Убедитесь, что json импортирован
+import json
 
 # Настройки Shotstack API
 SHOTSTACK_API_KEY = os.environ.get('SHOTSTACK_API_KEY')
@@ -33,7 +33,8 @@ def initiate_shotstack_render(cloudinary_video_url: str, video_metadata: dict,
                     "clips": [
                         {
                             "asset": {
-                                "type": "video",
+                                # ИЗМЕНЕНИЕ ЗДЕСЬ: "type": "video" -> "type": "url"
+                                "type": "url",
                                 "src": cloudinary_video_url
                                 # Здесь можно добавить другие параметры видео, если они нужны,
                                 # например, обрезка, громкость и т.д.
@@ -50,14 +51,21 @@ def initiate_shotstack_render(cloudinary_video_url: str, video_metadata: dict,
         "output": {
             "format": "mp4",
             "resolution": "sd", # Можно изменить на "hd", "full-hd" и т.д.
+            # Если вы хотите сохранить исходное соотношение сторон видео:
             "aspectRatio": "9:16" if video_metadata.get('height', 0) > video_metadata.get('width', 0) else "16:9"
+            # Если видео может быть не 9:16 или 16:9, Shotstack также поддерживает 'fill' или 'pad'
+            # Например, чтобы автоматически подогнать видео:
+            # "aspectRatio": "16:9",
+            # "fit": "cover"
         },
-        "callback": {
-            "url": "YOUR_CALLBACK_URL_HERE", # Опционально: URL для уведомлений о завершении рендеринга
-            "data": {
-                "taskId": original_filename # Пример передачи данных обратно
-            }
-        }
+        # ИЗМЕНЕНИЕ ЗДЕСЬ: либо удалить весь блок callback, либо указать валидный URL
+        # Пока что я закомментирую его, если он не нужен для начала
+        # "callback": {
+        #     "url": "https://video-meta-api.onrender.com/shotstack-callback", # Замените на реальный URL вашего бэкенда, если используете
+        #     "data": {
+        #         "taskId": original_filename
+        #     }
+        # }
     }
 
     # Если вы хотите добавить текст, например, имя пользователя Instagram:
@@ -75,8 +83,7 @@ def initiate_shotstack_render(cloudinary_video_url: str, video_metadata: dict,
             "position": "bottom", # Позиция текста
             "offset": { "y": "-0.2" } # Немного поднять от низа
         }
-        # Добавляем новый трек для текста или в существующий трек с видео
-        # Для простоты, добавим его в новый трек
+        # Добавляем новый трек для текста
         shotstack_json["timeline"]["tracks"].append({
             "clips": [text_clip]
         })
@@ -101,6 +108,7 @@ def initiate_shotstack_render(cloudinary_video_url: str, video_metadata: dict,
     if render_id:
         return render_id, "Shotstack render initiated successfully."
     else:
+        # Если Shotstack вернул 200, но без ID, это тоже ошибка
         raise Exception(f"Failed to get Shotstack render ID. Response: {shotstack_result}")
 
 def get_shotstack_render_status(render_id: str) -> dict:
