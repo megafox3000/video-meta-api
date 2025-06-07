@@ -22,85 +22,64 @@ def _get_shotstack_headers():
 def initiate_shotstack_render(cloudinary_video_url: str, video_metadata: dict,
                               original_filename: str, instagram_username: str = None,
                               email: str = None, linkedin_profile: str = None) -> (str, str):
-    # Здесь вам нужно будет построить JSON-тело запроса для Shotstack.
-    # Этот блок кода должен быть заполнен логикой, которая формирует `shotstack_json`
-    # на основе входных параметров.
-    # Пример структуры (вам нужно будет адаптировать ее под свои нужды):
+    # Создаем основной видеоклип
+    video_clip = {
+        "asset": {
+            "type": "url",
+            "src": cloudinary_video_url
+        },
+        "length": video_metadata.get('duration', 5),
+        "start": 0
+    }
+
+    # Если есть имя пользователя Instagram, создаем текстовый слой
+    if instagram_username:
+        text_layer = {
+            "asset": {
+                "type": "title",
+                "text": f"@{instagram_username}",
+                "style": "minimal",
+                "color": "#FFFFFF",
+                "size": "large"
+            },
+            "start": 0,
+            "length": video_metadata.get('duration', 5),
+            "position": "bottom",
+            "offset": { "y": "-0.2" }
+        }
+        # Добавляем текстовый слой в список слоев видеоклипа
+        if "layers" not in video_clip:
+            video_clip["layers"] = []
+        video_clip["layers"].append(text_layer)
+
+
     shotstack_json = {
         "timeline": {
             "tracks": [
                 {
                     "clips": [
-                        {
-                            "asset": {
-                                # ИЗМЕНЕНИЕ ЗДЕСЬ: "type": "video" -> "type": "url"
-                                "type": "url",
-                                "src": cloudinary_video_url
-                                # Здесь можно добавить другие параметры видео, если они нужны,
-                                # например, обрезка, громкость и т.д.
-                            },
-                            "length": video_metadata.get('duration', 5), # Длительность видео
-                            "start": 0
-                        }
+                        video_clip # Теперь наш video_clip может содержать layers
                     ]
                 }
             ],
-            "background": "#000000" # Черный фон по умолчанию
-            # Можно добавить другие треки для текста, аудио, изображений и т.д.
+            "background": "#000000"
         },
         "output": {
             "format": "mp4",
-            "resolution": "sd", # Можно изменить на "hd", "full-hd" и т.д.
-            # Если вы хотите сохранить исходное соотношение сторон видео:
+            "resolution": "sd",
             "aspectRatio": "9:16" if video_metadata.get('height', 0) > video_metadata.get('width', 0) else "16:9"
-            # Если видео может быть не 9:16 или 16:9, Shotstack также поддерживает 'fill' или 'pad'
-            # Например, чтобы автоматически подогнать видео:
-            # "aspectRatio": "16:9",
-            # "fit": "cover"
-        },
-        # ИЗМЕНЕНИЕ ЗДЕСЬ: либо удалить весь блок callback, либо указать валидный URL
-        # Пока что я закомментирую его, если он не нужен для начала
-        # "callback": {
-        #     "url": "https://video-meta-api.onrender.com/shotstack-callback", # Замените на реальный URL вашего бэкенда, если используете
-        #     "data": {
-        #         "taskId": original_filename
-        #     }
-        # }
-    }
-
-    # Если вы хотите добавить текст, например, имя пользователя Instagram:
-    if instagram_username:
-        text_clip = {
-            "asset": {
-                "type": "title",
-                "text": f"@{instagram_username}",
-                "style": "minimal", # Стиль текста, можно настроить
-                "color": "#FFFFFF", # Белый цвет
-                "size": "large"
-            },
-            "start": 0,
-            "length": video_metadata.get('duration', 5),
-            "position": "bottom", # Позиция текста
-            "offset": { "y": "-0.2" } # Немного поднять от низа
         }
-        # Добавляем новый трек для текста
-        shotstack_json["timeline"]["tracks"].append({
-            "clips": [text_clip]
-        })
+        # Callback секция остается закомментированной, если вы не используете ее
+    }
 
 
     print(f"[ShotstackService] Sending request to Shotstack API for {original_filename}...")
-
-    # --- ЛОГИРОВАНИЕ JSON-ТЕЛА ЗАПРОСА ---
-    # Мы логируем полную JSON-структуру, которая будет отправлена в Shotstack.
-    # Это поможет нам отладить ошибку 400 Bad Request.
     print(f"[ShotstackService] Shotstack JSON payload: {json.dumps(shotstack_json, indent=2)}")
 
-    # --- ИЗМЕНЕНИЕ: УДАЛЕН ЛИШНИЙ '/render' ---
     response = requests.post(SHOTSTACK_RENDER_URL,
                              json=shotstack_json,
                              headers=_get_shotstack_headers())
-    response.raise_for_status() # Вызывает исключение для 4xx/5xx ошибок
+    response.raise_for_status()
 
     shotstack_result = response.json()
     render_id = shotstack_result.get('response', {}).get('id')
@@ -108,7 +87,6 @@ def initiate_shotstack_render(cloudinary_video_url: str, video_metadata: dict,
     if render_id:
         return render_id, "Shotstack render initiated successfully."
     else:
-        # Если Shotstack вернул 200, но без ID, это тоже ошибка
         raise Exception(f"Failed to get Shotstack render ID. Response: {shotstack_result}")
 
 def get_shotstack_render_status(render_id: str) -> dict:
