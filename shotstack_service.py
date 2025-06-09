@@ -6,7 +6,7 @@ import json
 def create_shotstack_payload(cloudinary_video_url, video_metadata, original_filename, instagram_username, email, linkedin_profile):
     """
     Создает JSON-payload для запроса к Shotstack API.
-    Теперь с ИСПРАВЛЕННЫМ типом актива для видео (type: "video").
+    Теперь с ИСПРАВЛЕННОЙ структурой: видео и текст находятся на ОТДЕЛЬНЫХ дорожках (tracks).
     """
     duration = video_metadata.get('duration', 5.0)
     width = video_metadata.get('width', 0)
@@ -37,18 +37,20 @@ def create_shotstack_payload(cloudinary_video_url, video_metadata, original_file
     payload = {
         "timeline": {
             "tracks": [
-                {
+                {   # --- ДОРОЖКА 1: ДЛЯ ОСНОВНОГО ВИДЕО ---
                     "clips": [
                         {
                             "asset": {
-                                "type": "video",  # <-- ИЗМЕНЕНИЕ ЗДЕСЬ: "url" changed to "video"
+                                "type": "video",
                                 "src": cloudinary_video_url
                             },
                             "length": duration,
                             "start": 0
                         }
-                    ],
-                    "layers": [
+                    ]
+                },
+                {   # --- ДОРОЖКА 2: ДЛЯ ТЕКСТОВОГО НАЛОЖЕНИЯ ---
+                    "clips": [
                         {
                             "asset": {
                                 "type": "title",
@@ -58,16 +60,16 @@ def create_shotstack_payload(cloudinary_video_url, video_metadata, original_file
                                 "size": "large"
                             },
                             "start": 0,
-                            "length": duration,
+                            "length": duration, # Длительность текста равна длительности видео
                             "position": "bottom",
                             "offset": {
-                                "y": "-0.2"
+                                "y": "-0.2" # Немного выше нижнего края
                             }
                         }
                     ]
                 }
             ],
-            "background": "#000000"
+            "background": "#000000" # Черный фон
         },
         "output": {
             "format": "mp4",
@@ -131,7 +133,6 @@ def initiate_shotstack_render(cloudinary_video_url, video_metadata, original_fil
         error_message = f"An unexpected error occurred during Shotstack API call: {e}"
         print(f"[ShotstackService] ERROR: {error_message}")
         raise Exception(error_message) from e
-
 
 def get_shotstack_render_status(render_id):
     shotstack_api_key = os.environ.get('SHOTSTACK_API_KEY')
