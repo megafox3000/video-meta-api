@@ -1,3 +1,4 @@
+# app.py
 import os
 import cloudinary
 import cloudinary.uploader
@@ -477,11 +478,12 @@ def get_heavy_tasks():
     print("[HEAVY_TASKS] Request for heavy tasks received.")
     return jsonify({"message": "No heavy tasks pending for local worker yet."}), 200
 
----
+# ---
 ## Тестовые эндпоинты для отладки Shotstack
-
-**ВНИМАНИЕ:** Эти эндпоинты предназначены только для отладки. Удалите их из продакшн-кода после завершения тестирования!
----
+#
+# ВНИМАНИЕ: Эти эндпоинты предназначены только для отладки.
+# Удалите их из продакшн-кода после завершения тестирования!
+# ---
 
 @app.route('/test-shotstack-simple', methods=['GET']) # Делаем GET-запрос для удобства вызова из браузера
 def test_shotstack_simple_connection():
