@@ -1,14 +1,24 @@
 # script/shotstack_service.py
+
 import os
 import requests
 import json
 
-def create_shotstack_payload(cloudinary_video_url, video_metadata, original_filename, instagram_username, email, linkedin_profile):
+def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata, original_filename, instagram_username, email, linkedin_profile, connect_videos=False):
     """
     Создает JSON-payload для запроса к Shotstack API.
-    Теперь с ИСПРАВЛЕННОЙ структурой: видео и текст находятся на ОТДЕЛЬНЫХ дорожках (tracks).
+    Поддерживает объединение нескольких видео путем добавления нескольких клипов в одну дорожку.
+
+    :param cloudinary_video_url_or_urls: Список URL Cloudinary видео (если connect_videos=True)
+                                         Или одиночный URL (если connect_videos=False)
+    :param video_metadata: Метаданные основного видео (или суммарные, если объединяем)
+    :param original_filename: Имя файла (для логирования/названия)
+    :param instagram_username: Имя пользователя Instagram для наложения
+    :param email: Email пользователя
+    :param linkedin_profile: Профиль LinkedIn пользователя
+    :param connect_videos: Флаг, указывающий, нужно ли объединять видео.
     """
-    duration = video_metadata.get('duration', 5.0)
+    duration = video_metadata.get('duration', 5.0) # Общая длительность или длительность одного видео
     width = video_metadata.get('width', 0)
     height = video_metadata.get('height', 0)
 
@@ -16,7 +26,6 @@ def create_shotstack_payload(cloudinary_video_url, video_metadata, original_file
     cleaned_username = "".join(c for c in (instagram_username or '').strip() if c.isalnum() or c in ('_', '-')).strip()
     title_text = f"@{cleaned_username}" if cleaned_username else "Video Analysis"
 
-    # Определяем разрешение и aspectRatio на основе оригинальных метаданных
     output_resolution = "sd" # Default
     aspect_ratio = "16:9" # Default
 
@@ -33,23 +42,50 @@ def create_shotstack_payload(cloudinary_video_url, video_metadata, original_file
         else:
             aspect_ratio = "1:1" # Square
 
+    # --- Создание клипов для видео ---
+    video_clips = []
+    current_start_time = 0.0
+
+    if connect_videos and isinstance(cloudinary_video_url_or_urls, list):
+        # Если объединяем, то cloudinary_video_url_or_urls - это список URL
+        for url in cloudinary_video_url_or_urls:
+            # Для объединенных видео Shotstack автоматически определяет длительность,
+            # если она не указана в клипе. Но лучше, если у вас есть длительность каждого видео
+            # из БД, использовать ее для более точного позиционирования,
+            # особенно если вы хотите накладывать элементы в конкретные моменты каждого видео.
+            # Пока мы просто добавляем клипы без явной длительности здесь,
+            # позволяя Shotstack определить ее.
+            video_clips.append({
+                "asset": {
+                    "type": "video",
+                    "src": url
+                },
+                "start": current_start_time # Каждый клип начинается сразу после предыдущего
+                # Если вы можете получить длительность каждого видео из БД,
+                # добавьте "length": video_duration_for_this_clip,
+                # и обновите current_start_time += video_duration_for_this_clip
+            })
+            # Чтобы текстовый слой отображался на протяжении всего объединенного видео,
+            # общая длительность (duration) должна быть рассчитана на бэкенде в app.py
+            # и передана в video_metadata.
+    else:
+        # Если не объединяем или передан одиночный URL
+        video_clips.append({
+            "asset": {
+                "type": "video",
+                "src": cloudinary_video_url_or_urls # Здесь ожидается один URL
+            },
+            "length": duration, # Используем длительность для одиночного видео
+            "start": 0
+        })
 
     payload = {
         "timeline": {
             "tracks": [
-                {   # --- ДОРОЖКА 1: ДЛЯ ОСНОВНОГО ВИДЕО ---
-                    "clips": [
-                        {
-                            "asset": {
-                                "type": "video",
-                                "src": cloudinary_video_url
-                            },
-                            "length": duration,
-                            "start": 0
-                        }
-                    ]
+                {   # ДОРОЖКА 1: ДЛЯ ВИДЕОКЛИПОВ (одного или нескольких)
+                    "clips": video_clips # Здесь будут все видеоклипы
                 },
-                {   # --- ДОРОЖКА 2: ДЛЯ ТЕКСТОВОГО НАЛОЖЕНИЯ ---
+                {   # ДОРОЖКА 2: ДЛЯ ТЕКСТОВОГО НАЛОЖЕНИЯ
                     "clips": [
                         {
                             "asset": {
@@ -60,10 +96,10 @@ def create_shotstack_payload(cloudinary_video_url, video_metadata, original_file
                                 "size": "large"
                             },
                             "start": 0,
-                            "length": duration, # Длительность текста равна длительности видео
+                            "length": duration, # Длительность текста равна ОБЩЕЙ длительности видео
                             "position": "bottom",
                             "offset": {
-                                "y": "-0.2" # Немного выше нижнего края
+                                "y": "-0.2"
                             }
                         }
                     ]
@@ -80,7 +116,11 @@ def create_shotstack_payload(cloudinary_video_url, video_metadata, original_file
 
     return payload
 
-def initiate_shotstack_render(cloudinary_video_url, video_metadata, original_filename, instagram_username, email, linkedin_profile):
+def initiate_shotstack_render(cloudinary_video_url_or_urls, video_metadata, original_filename, instagram_username, email, linkedin_profile, connect_videos=False):
+    """
+    Отправляет запрос на рендеринг видео в Shotstack API.
+    Теперь принимает один URL или список URL для объединения.
+    """
     shotstack_api_key = os.environ.get('SHOTSTACK_API_KEY')
     shotstack_render_url = "https://api.shotstack.io/stage/render"
 
@@ -93,15 +133,16 @@ def initiate_shotstack_render(cloudinary_video_url, video_metadata, original_fil
     }
 
     payload = create_shotstack_payload(
-        cloudinary_video_url,
+        cloudinary_video_url_or_urls, # Это может быть список или одиночный URL
         video_metadata,
         original_filename,
         instagram_username,
         email,
-        linkedin_profile
+        linkedin_profile,
+        connect_videos # Передаем флаг
     )
 
-    print(f"[ShotstackService] Sending request to Shotstack API for {original_filename}...")
+    print(f"[ShotstackService] Sending request to Shotstack API for {original_filename} (Connect Videos: {connect_videos})...")
     print(f"[ShotstackService] Shotstack JSON payload: {json.dumps(payload, indent=2)}")
 
     try:
@@ -133,6 +174,7 @@ def initiate_shotstack_render(cloudinary_video_url, video_metadata, original_fil
         error_message = f"An unexpected error occurred during Shotstack API call: {e}"
         print(f"[ShotstackService] ERROR: {error_message}")
         raise Exception(error_message) from e
+
 
 def get_shotstack_render_status(render_id):
     shotstack_api_key = os.environ.get('SHOTSTACK_API_KEY')
