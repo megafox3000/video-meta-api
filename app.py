@@ -13,7 +13,7 @@ import hashlib
 import time
 import requests
 import json # Добавлен импорт json
-import shotstack_service
+from script import shotstack_service
 
 app = Flask(__name__)
 CORS(app)
@@ -478,7 +478,7 @@ def generate_shotstack_video():
 
 @app.route('/process_videos', methods=['POST'])
 def process_videos():
-    session = Session()
+    session = Session() # Убедитесь, что используете локальную сессию
     try:
         data = request.json
         task_ids = data.get('task_ids', [])
@@ -497,21 +497,26 @@ def process_videos():
         tasks = []
         for tid in task_ids:
             task = session.query(Task).filter_by(task_id=tid).first()
-            if task and task.cloudinary_url: # Убедимся, что задача существует и имеет URL Cloudinary
+            if task and task.cloudinary_url and task.video_metadata: # Убедимся, что есть не только URL, но и метаданные
                 tasks.append(task)
             else:
-                print(f"[PROCESS_VIDEOS] Skipping task {tid}: not found or missing Cloudinary URL.")
+                print(f"[PROCESS_VIDEOS] Skipping task {tid}: not found, missing Cloudinary URL, or missing video metadata.")
 
         if not tasks:
-            print("[PROCESS_VIDEOS] No valid tasks found for provided IDs or Cloudinary URLs missing.")
-            return jsonify({"error": "No valid tasks found for processing (missing or invalid data). Please ensure videos are uploaded."}), 404
+            print("[PROCESS_VIDEOS] No valid tasks found for provided IDs or Cloudinary URLs/metadata missing.")
+            return jsonify({"error": "No valid tasks found for processing (missing or invalid data). Please ensure videos are uploaded and have full metadata."}), 404
+
+        render_id = None
+        message = ""
+        main_task = None # Определяем main_task заранее
 
         # Если объединяем видео
         if connect_videos and len(tasks) >= 2:
             print(f"[PROCESS_VIDEOS] Initiating concatenation for {len(tasks)} videos.")
+            
             # Для объединения, возьмем первый таск как "главный" для сохранения информации о рендере.
-            # В реальном приложении можно создать новый таск для объединенного видео.
-            main_task = tasks[0]
+            # В реальном приложении, возможно, стоит создать новый таск для объединенного видео.
+            main_task = tasks[0] 
             cloudinary_video_urls = [t.cloudinary_url for t in tasks]
 
             # Рассчитываем общую длительность для объединенного видео
@@ -522,51 +527,68 @@ def process_videos():
             # Мы можем использовать параметры первого видео как базовые.
             combined_metadata = main_task.video_metadata.copy() if main_task.video_metadata else {}
             combined_metadata['duration'] = total_duration
+            # !!! ВАЖНОЕ ИЗМЕНЕНИЕ ЗДЕСЬ !!!
+            # Убедитесь, что передаете width и height из метаданных первого видео.
+            combined_metadata['width'] = main_task.video_metadata.get('width', 0)
+            combined_metadata['height'] = main_task.video_metadata.get('height', 0)
 
             render_id, message = shotstack_service.initiate_shotstack_render(
                 cloudinary_video_url_or_urls=cloudinary_video_urls, # Передаем СПИСОК URL
-                video_metadata=combined_metadata, # Передаем объединенные метаданные (главное - общая длительность)
-                original_filename=f"Combined_Videos_{main_task.original_filename}", # Название для объединенного видео
+                video_metadata=combined_metadata, # Передаем объединенные метаданные (главное - общая длительность, ширина, высота)
+                original_filename=f"Combined_Videos_{main_task.original_filename.split('.')[0]}", # Название для объединенного видео без расширения
                 instagram_username=instagram_username,
                 email=email,
                 linkedin_profile=linkedin_profile,
                 connect_videos=True # Флаг для ShotstackService, что это объединение
             )
 
-            main_task.shotstack_render_id = render_id
-            main_task.status = 'shotstack_pending'
-            main_task.message = f"Concatenated video render initiated with ID: {render_id}"
-            db.session.commit() # Сохраняем изменения для main_task
+            if render_id:
+                # Обновляем статус задачи в БД для main_task
+                main_task.shotstackRenderId = render_id # Исправлено на shotstackRenderId
+                main_task.status = 'shotstack_pending'
+                main_task.message = f"Concatenated video render initiated with ID: {render_id}"
+                session.commit() # Используем session.commit()
+                print(f"[PROCESS_VIDEOS] Shotstack render initiated for connected videos. Render ID: {render_id}")
+            else:
+                session.rollback() # Откат, если render_id не получен
+                print(f"[PROCESS_VIDEOS] Shotstack API did not return a render ID for connected videos. Unexpected.")
+                return jsonify({"error": "Failed to get Shotstack render ID for concatenated video. (Service issue)"}), 500
 
-            print(f"[PROCESS_VIDEOS] Shotstack render initiated for connected videos. Render ID: {render_id}")
             return jsonify({"message": message, "shotstackRenderId": render_id, "mainTaskId": main_task.task_id}), 200
 
         # Если не объединяем видео (или видео одно, и объединение не выбрано)
         else:
             print(f"[PROCESS_VIDEOS] Initiating single video processing for {tasks[0].task_id}.")
-            # В этом случае, просто обрабатываем первое видео из списка
-            # (предполагается, что фронтенд вызовет этот эндпоинт только для одного видео,
-            # если объединение не выбрано, или если только одно видео загружено).
-            # Или же фронтенд будет вызывать generate-shotstack-video для каждого видео по отдельности.
-            # Для простоты, здесь мы просто обрабатываем ПЕРВОЕ видео, если `connect_videos` False.
-            main_task = tasks[0]
+            main_task = tasks[0] # Всегда берем первый, если не объединяем
+
+            # !!! ВАЖНОЕ ИЗМЕНЕНИЕ ЗДЕСЬ !!!
+            # Убедитесь, что video_metadata передает width и height.
+            video_metadata_for_single = main_task.video_metadata.copy() if main_task.video_metadata else {}
+            # duration, width, height уже должны быть в video_metadata_for_single, если они пришли от Cloudinary
+
             render_id, message = shotstack_service.initiate_shotstack_render(
                 cloudinary_video_url_or_urls=main_task.cloudinary_url, # Одиночный URL
-                video_metadata=main_task.video_metadata or {},
+                video_metadata=video_metadata_for_single, # Теперь содержит duration, width, height
                 original_filename=main_task.original_filename,
                 instagram_username=instagram_username,
                 email=email,
                 linkedin_profile=linkedin_profile,
                 connect_videos=False # Явно указываем False
             )
-            main_task.shotstack_render_id = render_id
-            main_task.status = 'shotstack_pending'
-            main_task.message = f"Single video render initiated with ID: {render_id}"
-            db.session.commit()
 
-            print(f"[PROCESS_VIDEOS] Shotstack render initiated for {main_task.original_filename}. Render ID: {render_id}")
+            if render_id:
+                # Обновляем статус задачи в БД
+                main_task.shotstackRenderId = render_id # Исправлено на shotstackRenderId
+                main_task.status = 'shotstack_pending'
+                main_task.message = f"Single video render initiated with ID: {render_id}"
+                session.commit() # Используем session.commit()
+                print(f"[PROCESS_VIDEOS] Shotstack render initiated for {main_task.original_filename}. Render ID: {render_id}")
+            else:
+                session.rollback() # Откат, если render_id не получен
+                print(f"[PROCESS_VIDEOS] Shotstack API did not return a render ID for single video {main_task.task_id}. Unexpected.")
+                return jsonify({"error": "Failed to get Shotstack render ID for single video. (Service issue)"}), 500
+
             return jsonify({"message": message, "shotstackRenderId": render_id, "mainTaskId": main_task.task_id}), 200
-
 
     except SQLAlchemyError as e:
         session.rollback()
