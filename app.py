@@ -1,4 +1,3 @@
-# app.py
 import os
 import cloudinary
 import cloudinary.uploader
@@ -12,7 +11,8 @@ from datetime import datetime
 import hashlib
 import time
 import requests
-import shotstack_service # <-- НОВЫЙ ИМПОРТ
+import json # Добавлен импорт json
+import shotstack_service
 
 app = Flask(__name__)
 CORS(app)
@@ -57,7 +57,7 @@ class Task(Base):
     timestamp = Column(DateTime, default=datetime.now)
     # --- НОВЫЕ ПОЛЯ ДЛЯ SHOTSTACK ---
     shotstackRenderId = Column(String) # ID, который Shotstack возвращает после запуска рендера
-    shotstackUrl = Column(String)     # Итоговый URL сгенерированного видео от Shotstack
+    shotstackUrl = Column(String)      # Итоговый URL сгенерированного видео от Shotstack
     # --- КОНЕЦ НОВЫХ ПОЛЕЙ ---
 
     def __repr__(self):
@@ -76,7 +76,7 @@ class Task(Base):
             "message": self.message,
             "timestamp": self.timestamp.isoformat() if self.timestamp else None,
             "shotstackRenderId": self.shotstackRenderId, # Добавляем в словарь
-            "shotstackUrl": self.shotstackUrl          # Добавляем в словарь
+            "shotstackUrl": self.shotstackUrl            # Добавляем в словарь
         }
 
 def create_tables():
@@ -86,8 +86,6 @@ def create_tables():
 create_tables()
 
 # ----------- GPS & METADATA FUNCTIONS (без изменений) -----------
-# Оставил их на случай, если они используются в других частях вашего проекта
-# или для потенциального будущего расширения.
 def parse_gps_tags(tags):
     gps_data = {}
     for key, value in tags.items():
@@ -291,7 +289,7 @@ def upload_video():
 
                 if new_upload_duration <= 0 or new_upload_width <= 0 or new_upload_height <= 0 or new_upload_bytes <= 0:
                     print(f"[{full_public_id}] CRITICAL WARNING: Video uploaded/re-uploaded, but essential metadata (duration/resolution/size) is still 0 or missing from Cloudinary response. Full metadata: {upload_result}")
-                    session.rollback() 
+                    session.rollback()  
                     return jsonify({
                         'error': 'Video uploaded but could not retrieve complete and valid metadata from Cloudinary. Please try again or check video file.',
                         'taskId': full_public_id,
@@ -478,6 +476,104 @@ def generate_shotstack_video():
 def get_heavy_tasks():
     print("[HEAVY_TASKS] Request for heavy tasks received.")
     return jsonify({"message": "No heavy tasks pending for local worker yet."}), 200
+
+---
+## Тестовые эндпоинты для отладки Shotstack
+
+**ВНИМАНИЕ:** Эти эндпоинты предназначены только для отладки. Удалите их из продакшн-кода после завершения тестирования!
+---
+
+@app.route('/test-shotstack-simple', methods=['GET']) # Делаем GET-запрос для удобства вызова из браузера
+def test_shotstack_simple_connection():
+    print("[TEST_SHOTSTACK_SIMPLE] Received request to test simple Shotstack connection.")
+    try:
+        # Важно: используем API_KEY и URL напрямую из переменных окружения
+        # чтобы убедиться, что они доступны в контексте app.py
+        shotstack_api_key = os.environ.get('SHOTSTACK_API_KEY')
+        shotstack_render_url = "https://api.shotstack.io/stage/render"
+
+        if not shotstack_api_key:
+            print("[TEST_SHOTSTACK_SIMPLE] ERROR: SHOTSTACK_API_KEY is not set!")
+            return jsonify({"status": "error", "message": "SHOTSTACK_API_KEY environment variable is not set."}), 500
+
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": shotstack_api_key
+        }
+
+        # Максимально простой JSON-запрос для Shotstack
+        test_payload = {
+            "timeline": {
+                "tracks": [
+                    {
+                        "clips": [
+                            {
+                                "asset": {
+                                    "type": "title",
+                                    "text": "Hello Shotstack!",
+                                    "style": "minimal",
+                                    "color": "#FF0000",
+                                    "size": "large"
+                                },
+                                "start": 0,
+                                "length": 2 # Длительность 2 секунды
+                            }
+                        ]
+                    }
+                ],
+                "background": "#0000FF" # Синий фон
+            },
+            "output": {
+                "format": "mp4",
+                "resolution": "sd",
+                "aspectRatio": "16:9"
+            }
+        }
+
+        print(f"[TEST_SHOTSTACK_SIMPLE] Sending simple payload: {json.dumps(test_payload, indent=2)}")
+
+        # Отправляем POST-запрос
+        test_response = requests.post(shotstack_render_url, json=test_payload, headers=headers, timeout=15)
+        test_response.raise_for_status() # Вызовет исключение для 4xx/5xx ошибок
+
+        shotstack_result = test_response.json()
+        render_id = shotstack_result.get('response', {}).get('id')
+
+        if render_id:
+            print(f"[TEST_SHOTSTACK_SIMPLE] Shotstack render initiated successfully. Render ID: {render_id}")
+            return jsonify({
+                "status": "success",
+                "message": "Simple Shotstack render initiated!",
+                "renderId": render_id,
+                "shotstackResponse": shotstack_result
+            }), 200
+        else:
+            print(f"[TEST_SHOTSTACK_SIMPLE] Failed to get Shotstack render ID. Full response: {shotstack_result}")
+            return jsonify({
+                "status": "error",
+                "message": "Failed to get Shotstack render ID.",
+                "shotstackResponse": shotstack_result
+            }), 500
+
+    except requests.exceptions.HTTPError as e:
+        error_message = f"HTTP Error during Shotstack connection test: {e}"
+        response_text = e.response.text if e.response is not None else "No response text"
+        print(f"[TEST_SHOTSTACK_SIMPLE] {error_message}. Details: {response_text}")
+        return jsonify({
+            "status": "error",
+            "message": error_message,
+            "details": response_text
+        }), e.response.status_code if e.response is not None else 500
+    except requests.exceptions.ConnectionError as e:
+        print(f"[TEST_SHOTSTACK_SIMPLE] Connection Error to Shotstack: {e}")
+        return jsonify({"status": "error", "message": f"Connection Error to Shotstack: {e}"}), 500
+    except requests.exceptions.Timeout as e:
+        print(f"[TEST_SHOTSTACK_SIMPLE] Timeout connecting to Shotstack: {e}")
+        return jsonify({"status": "error", "message": f"Timeout connecting to Shotstack: {e}"}), 500
+    except Exception as e:
+        print(f"[TEST_SHOTSTACK_SIMPLE] An unexpected error occurred during Shotstack connection test: {e}")
+        return jsonify({"status": "error", "message": f"An unexpected error occurred: {e}"}), 500
+
 
 if __name__ == '__main__':
     from waitress import serve
