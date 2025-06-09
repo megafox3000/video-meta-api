@@ -13,7 +13,7 @@ import hashlib
 import time
 import requests
 import json # Добавлен импорт json
-from script import shotstack_service
+import shotstack_service
 
 app = Flask(__name__)
 CORS(app)
