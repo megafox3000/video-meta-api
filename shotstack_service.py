@@ -5,13 +5,34 @@ import json
 
 def create_shotstack_payload(cloudinary_video_url, video_metadata, original_filename, instagram_username, email, linkedin_profile):
     """
-    Создает МИНИМАЛЬНЫЙ JSON-payload для запроса к Shotstack API для пошагового дебага.
+    Создает JSON-payload для запроса к Shotstack API.
+    Теперь с ИСПРАВЛЕННОЙ структурой для 'layers'.
     """
-    # Для минимального теста просто используем базовый текст и короткую длительность.
-    # Мы даже не будем использовать Cloudinary URL на этом этапе, чтобы исключить его как источник проблем.
+    duration = video_metadata.get('duration', 5.0)
+    width = video_metadata.get('width', 0)
+    height = video_metadata.get('height', 0)
 
-    title_text = "Debug Test" # Простой текст
-    duration = 2 # Две секунды
+    # Используем cleaned_username для заголовка
+    cleaned_username = "".join(c for c in (instagram_username or '').strip() if c.isalnum() or c in ('_', '-')).strip()
+    title_text = f"@{cleaned_username}" if cleaned_username else "Video Analysis"
+
+    # Определяем разрешение и aspectRatio на основе оригинальных метаданных
+    output_resolution = "sd" # Default
+    aspect_ratio = "16:9" # Default
+
+    if width and height:
+        if width >= 1920 or height >= 1920: # Consider anything above 1080p as HD
+             output_resolution = "hd"
+        elif width >= 1280 or height >= 720: # Consider SD for 720p
+             output_resolution = "sd"
+
+        if width > height:
+            aspect_ratio = "16:9" # Landscape
+        elif height > width:
+            aspect_ratio = "9:16" # Portrait
+        else:
+            aspect_ratio = "1:1" # Square
+
 
     payload = {
         "timeline": {
@@ -20,34 +41,46 @@ def create_shotstack_payload(cloudinary_video_url, video_metadata, original_file
                     "clips": [
                         {
                             "asset": {
-                                "type": "title", # Используем asset type "title"
+                                "type": "url",
+                                "src": cloudinary_video_url
+                            },
+                            "length": duration,
+                            "start": 0
+                        }
+                    ],
+                    # --- ИСПРАВЛЕНИЕ: 'layers' ТЕПЕРЬ НА УРОВНЕ 'TRACK' ---
+                    "layers": [
+                        {
+                            "asset": {
+                                "type": "title",
                                 "text": title_text,
                                 "style": "minimal",
                                 "color": "#FFFFFF",
-                                "size": "medium"
+                                "size": "large"
                             },
                             "start": 0,
-                            "length": duration
+                            "length": duration, # Длительность текста равна длительности видео
+                            "position": "bottom",
+                            "offset": {
+                                "y": "-0.2" # Немного выше нижнего края
+                            }
                         }
                     ]
+                    # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
                 }
             ],
             "background": "#000000" # Черный фон
         },
         "output": {
             "format": "mp4",
-            "resolution": "sd", # Самое низкое разрешение
-            "aspectRatio": "16:9"
+            "resolution": output_resolution,
+            "aspectRatio": aspect_ratio
         }
     }
 
     return payload
 
 def initiate_shotstack_render(cloudinary_video_url, video_metadata, original_filename, instagram_username, email, linkedin_profile):
-    """
-    Отправляет запрос на рендеринг видео в Shotstack API.
-    Возвращает renderId в случае успеха.
-    """
     shotstack_api_key = os.environ.get('SHOTSTACK_API_KEY')
     shotstack_render_url = "https://api.shotstack.io/stage/render"
 
@@ -59,18 +92,21 @@ def initiate_shotstack_render(cloudinary_video_url, video_metadata, original_fil
         "x-api-key": shotstack_api_key
     }
 
-    # Использование минимального payload.
-    # Передаем заглушки вместо реальных данных, так как они не используются в минимальном payload.
     payload = create_shotstack_payload(
-        "dummy_url", {}, "dummy_filename", "dummy_user", "dummy@example.com", "dummy_linkedin"
+        cloudinary_video_url,
+        video_metadata,
+        original_filename,
+        instagram_username,
+        email,
+        linkedin_profile
     )
 
-    print(f"[ShotstackService] Sending MINIMAL request to Shotstack API for debug...")
+    print(f"[ShotstackService] Sending request to Shotstack API for {original_filename}...")
     print(f"[ShotstackService] Shotstack JSON payload: {json.dumps(payload, indent=2)}")
 
     try:
         response = requests.post(shotstack_render_url, json=payload, headers=headers, timeout=30)
-        response.raise_for_status() # Вызовет исключение для 4xx/5xx ошибок
+        response.raise_for_status()
 
         result = response.json()
         render_id = result.get('response', {}).get('id')
@@ -98,12 +134,7 @@ def initiate_shotstack_render(cloudinary_video_url, video_metadata, original_fil
         print(f"[ShotstackService] ERROR: {error_message}")
         raise Exception(error_message) from e
 
-
 def get_shotstack_render_status(render_id):
-    """
-    Получает статус рендеринга видео из Shotstack API.
-    Возвращает словарь со статусом и URL видео (если завершено).
-    """
     shotstack_api_key = os.environ.get('SHOTSTACK_API_KEY')
     shotstack_status_url = f"https://api.shotstack.io/stage/render/{render_id}"
 
@@ -118,12 +149,12 @@ def get_shotstack_render_status(render_id):
 
     try:
         response = requests.get(shotstack_status_url, headers=headers, timeout=15)
-        response.raise_for_status() # Вызовет исключение для 4xx/5xx ошибок
+        response.raise_for_status()
 
         result = response.json()
         status = result.get('response', {}).get('status')
-        url = result.get('response', {}).get('url') # URL финального видео
-        error_message = result.get('response', {}).get('message') # Сообщение об ошибке, если есть
+        url = result.get('response', {}).get('url')
+        error_message = result.get('response', {}).get('message')
 
         return {
             "status": status,
