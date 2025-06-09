@@ -1,5 +1,3 @@
-# shotstack_service.py
-
 import os
 import requests
 import json
@@ -10,7 +8,13 @@ SHOTSTACK_RENDER_URL = "https://api.shotstack.io/stage/render" # Правиль�
 SHOTSTACK_OUTPUT_URL = "https://api.shotstack.io/stage/output" # Правильный базовый URL для проверки статуса
 
 if not SHOTSTACK_API_KEY:
+    print("[ShotstackService] ERROR: SHOTSTACK_API_KEY environment variable is not set!")
     raise RuntimeError("SHOTSTACK_API_KEY environment variable is not set!")
+else:
+    # ВРЕМЕННОЕ ЛОГИРОВАНИЕ ДЛЯ ОТЛАДКИ - УДАЛИТЕ ПОСЛЕ ТЕСТОВ
+    print(f"[ShotstackService] SHOTSTACK_API_KEY loaded successfully. Length: {len(SHOTSTACK_API_KEY)}, Starts with: {SHOTSTACK_API_KEY[:5]}*****")
+# КОНЕЦ ВРЕМЕННОГО ЛОГИРОВАНИЯ
+
 
 def _get_shotstack_headers():
     """Возвращает стандартные заголовки для запросов Shotstack."""
@@ -118,7 +122,7 @@ def get_shotstack_render_status(render_id: str) -> dict:
 # ---
 if __name__ == '__main__':
     # Установите эти переменные окружения для локального тестирования
-    os.environ['SHOTSTACK_API_KEY'] = 'YOUR_SHOTSTACK_API_KEY'
+    # os.environ['SHOTSTACK_API_KEY'] = 'YOUR_SHOTSTACK_API_KEY' # РАСКОММЕНТИРУЙТЕ И ВСТАВЬТЕ СВОЙ КЛЮЧ
     # os.environ['DATABASE_URL'] = '...' # Если нужно для других тестов
 
     print("--- Тестирование shotstack_service.py напрямую ---")
