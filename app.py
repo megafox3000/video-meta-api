@@ -485,7 +485,7 @@ def process_videos():
     session = Session()
     try:
         data = request.json
-        task_ids = data.get('task_ids', [])
+        task_ids = data.get('video_ids', [])
         connect_videos = data.get('connect_videos', False)
         instagram_username = data.get('instagram_username')
         email = data.get('email')
