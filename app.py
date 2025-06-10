@@ -13,12 +13,12 @@ import hashlib
 import time
 import requests
 import json # Добавлен импорт json
-import shotstack_service
+import shotstack_service # Импортируем наш новый сервис Shotstack
 
 app = Flask(__name__)
 CORS(app)
 
-# Cloudinary configuration
+# Конфигурация Cloudinary
 cloudinary.config(
     cloud_name = os.environ.get('CLOUDINARY_CLOUD_NAME'),
     api_key = os.environ.get('CLOUDINARY_API_KEY'),
@@ -26,7 +26,7 @@ cloudinary.config(
     secure = True
 )
 
-# Database configuration
+# Конфигурация базы данных
 DATABASE_URL = os.environ.get('DATABASE_URL')
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL environment variable is not set!")
@@ -41,7 +41,7 @@ engine = create_engine(DATABASE_URL, connect_args=connect_args)
 Base = declarative_base()
 Session = sessionmaker(bind=engine)
 
-# Task model definition
+# Определение модели задачи
 class Task(Base):
     __tablename__ = 'tasks'
 
@@ -66,6 +66,7 @@ class Task(Base):
 
     def to_dict(self):
         return {
+            "id": self.id, # Добавляем id для удобства
             "taskId": self.task_id,
             "instagram_username": self.instagram_username,
             "email": self.email,
@@ -164,186 +165,87 @@ def upload_video():
             return jsonify({"error": "Instagram username is required and must be valid."}), 400
 
         original_filename_base = os.path.splitext(filename)[0]
-        full_public_id = f"hife_video_analysis/{cleaned_username}/{original_filename_base}"
+        # Используем хэш для уникальности task_id, чтобы избежать конфликтов при повторной загрузке
+        # одного и того же файла, но с разными метаданными или при ошибках.
+        # Это также позволяет хранить несколько версий одного и того же "оригинального файла"
+        # если пользователь загружает его несколько раз.
+        unique_hash = hashlib.md5(f"{cleaned_username}/{filename}/{datetime.now().timestamp()}".encode()).hexdigest()
+        task_id = f"{cleaned_username}/{original_filename_base}_{unique_hash}" # Новый, уникальный task_id
 
-        print(f"[{full_public_id}] Received upload request for file: '{filename}'")
-        print(f"[{full_public_id}] User data: Instagram='{instagram_username}', Email='{email}', LinkedIn='{linkedin_profile}'")
+        print(f"[{task_id}] Received upload request for file: '{filename}'")
+        print(f"[{task_id}] User data: Instagram='{instagram_username}', Email='{email}', LinkedIn='{linkedin_profile}'")
 
-        existing_task = session.query(Task).filter_by(task_id=full_public_id).first()
+        # Всегда выполняем загрузку, чтобы получить свежие метаданные и URL,
+        # так как task_id теперь будет уникальным для каждой загрузки.
+        print(f"[{task_id}] Uploading video to Cloudinary...")
+        upload_result = cloudinary.uploader.upload(
+            file,
+            resource_type="video",
+            folder=f"hife_video_analysis/{cleaned_username}",
+            public_id=f"{original_filename_base}_{unique_hash}", # Используем уникальный public_id в Cloudinary
+            unique_filename=False, # public_id уже уникален
+            overwrite=True, # В случае перезаливки (например, если файл уже был загружен с таким же хешем)
+            quality="auto",
+            format="mp4",
+            tags=["hife_analysis", cleaned_username]
+        )
+        print(f"[{task_id}] Cloudinary response after new upload: {upload_result}")
 
-        should_reupload = False
-        cloudinary_resource_info = None # Для хранения информации от Cloudinary API
+        if upload_result and upload_result.get('secure_url'):
+            cloudinary_url = upload_result['secure_url']
+            print(f"[{task_id}] Cloudinary URL: {cloudinary_url}")
 
-        if existing_task:
-            print(f"[{full_public_id}] Task with task_id '{full_public_id}' found in DB.")
+            # --- ПРОВЕРКА DURATION И ДРУГИХ ПОЛЕЙ ПОСЛЕ ЗАГРУЗКИ ---
+            new_upload_duration = upload_result.get('duration', 0)
+            new_upload_width = upload_result.get('width', 0)
+            new_upload_height = upload_result.get('height', 0)
+            new_upload_bytes = upload_result.get('bytes', 0)
 
-            # --- РАСШИРЕННАЯ ПРОВЕРКА: Проверяем несколько полей из локальной БД ---
-            db_metadata = existing_task.video_metadata or {}
-            db_duration = db_metadata.get('duration', 0)
-            db_width = db_metadata.get('width', 0)
-            db_height = db_metadata.get('height', 0)
-            db_bytes = db_metadata.get('bytes', 0)
-            
-            is_db_metadata_valid_and_sufficient = False
-            if db_duration > 0 and db_width > 0 and db_height > 0 and db_bytes > 0:
-                is_db_metadata_valid_and_sufficient = True
-            
-            if is_db_metadata_valid_and_sufficient:
-                print(f"[{full_public_id}] All essential metadata (duration, resolution, size) found in local DB. Will try to use existing resource.")
-                
-                # Если у нас уже есть ВСЕ валидные метаданные в БД,
-                # мы можем предположить, что это то же самое видео.
-                # Обновляем только пользовательские данные и timestamp.
-                existing_task.instagram_username = instagram_username
-                existing_task.email = email
-                existing_task.linkedin_profile = linkedin_profile
-                existing_task.timestamp = datetime.now()
-                existing_task.status = 'completed' # Убедимся, что статус корректен
-                existing_task.message = 'Video already exists with sufficient metadata in DB. User info updated.'
-                session.commit()
+            if new_upload_duration <= 0 or new_upload_width <= 0 or new_upload_height <= 0 or new_upload_bytes <= 0:
+                print(f"[{task_id}] CRITICAL WARNING: Video uploaded, but essential metadata (duration/resolution/size) is still 0 or missing from Cloudinary response. Full metadata: {upload_result}")
+                session.rollback()  # Откатываем транзакцию
                 return jsonify({
-                    'message': 'Video info updated from DB (sufficient metadata already present).',
-                    'taskId': existing_task.task_id,
-                    'cloudinary_url': existing_task.cloudinary_url,
-                    'originalFilename': existing_task.original_filename,
-                    'metadata': existing_task.video_metadata,
-                    'status': existing_task.status
-                }), 200
-            else:
-                print(f"[{full_public_id}] Essential metadata in local DB is incomplete or invalid. Proceeding to check Cloudinary.")
-            # --- КОНЕЦ РАСШИРЕННОЙ ПРОВЕРКИ ---
+                    'error': 'Video uploaded but could not retrieve complete and valid metadata from Cloudinary. Please try again or check video file.',
+                    'taskId': task_id,
+                    'cloudinary_url': cloudinary_url,
+                    'metadata': upload_result # Возвращаем все, что получили
+                }), 500
+            # --- КОНЕЦ ПРОВЕРКИ DURATION И ДРУГИХ ПОЛЕЙ ПОСЛЕ ЗАГРУЗКИ ---
 
-            # Если метаданные в БД невалидны/неполны, продолжаем проверку Cloudinary
-            try:
-                # Попытка получить свежие метаданные из Cloudinary
-                cloudinary_resource_info = cloudinary.api.resource(full_public_id, resource_type="video")
-                
-                # Проверяем, есть ли duration и что оно не равно 0, а также другие поля
-                cloudinary_duration = cloudinary_resource_info.get('duration', 0)
-                cloudinary_width = cloudinary_resource_info.get('width', 0)
-                cloudinary_height = cloudinary_resource_info.get('height', 0)
-                cloudinary_bytes = cloudinary_resource_info.get('bytes', 0)
-
-                if cloudinary_resource_info and cloudinary_duration > 0 and cloudinary_width > 0 and cloudinary_height > 0 and cloudinary_bytes > 0:
-                    print(f"[{full_public_id}] Cloudinary resource found with VALID ESSENTIAL METADATA. Updating DB.")
-                    # Обновляем нашу БД свежими данными от Cloudinary
-                    existing_task.cloudinary_url = cloudinary_resource_info.get('secure_url')
-                    existing_task.video_metadata = cloudinary_resource_info
-                    existing_task.status = 'completed'
-                    existing_task.message = 'Video found on Cloudinary with valid metadata. DB info updated.'
-                    existing_task.timestamp = datetime.now()
-                    existing_task.instagram_username = instagram_username # Обновляем пользовательские данные
-                    existing_task.email = email
-                    existing_task.linkedin_profile = linkedin_profile
-                    session.commit()
-                    return jsonify({
-                        'message': 'Video info updated from Cloudinary.',
-                        'taskId': existing_task.task_id,
-                        'cloudinary_url': existing_task.cloudinary_url,
-                        'originalFilename': existing_task.original_filename,
-                        'metadata': existing_task.video_metadata,
-                        'status': existing_task.status
-                    }), 200
-                else:
-                    # Ресурс найден на Cloudinary, но метаданные некорректны/неполны
-                    print(f"[{full_public_id}] Cloudinary resource found but essential metadata (duration/resolution/size) is 0 or missing. Forcing re-upload.")
-                    should_reupload = True
-            except cloudinary.api.NotFound:
-                # Ресурс не найден на Cloudinary, хотя есть в нашей БД
-                print(f"[{full_public_id}] Cloudinary resource NOT found despite DB record. Forcing re-upload.")
-                should_reupload = True
-            except Exception as e:
-                # Другая ошибка при запросе к Cloudinary
-                print(f"[{full_public_id}] Error checking Cloudinary resource: {e}. Forcing re-upload.")
-                should_reupload = True
-        else:
-            # Задачи нет в нашей БД, это новая загрузка
-            print(f"[{full_public_id}] Task not found in DB. This is a new upload.")
-            should_reupload = True
-            
-        # Если should_reupload = True (файл не найден в БД, или найден, но нет на Cloudinary,
-        # или есть, но метаданные некорректны), выполняем загрузку
-        if should_reupload:
-            print(f"[{full_public_id}] Uploading/re-uploading video to Cloudinary to ensure full metadata...")
-            upload_result = cloudinary.uploader.upload(
-                file,
-                resource_type="video",
-                folder=f"hife_video_analysis/{cleaned_username}",
-                public_id=original_filename_base,
-                unique_filename=False,
-                overwrite=True, # Обязательно для обновления метаданных
-                quality="auto",
-                format="mp4",
-                tags=["hife_analysis", cleaned_username]
+            new_task = Task(
+                task_id=task_id, # Уникальный task_id
+                instagram_username=instagram_username,
+                email=email,
+                linkedin_profile=linkedin_profile,
+                original_filename=filename,
+                status='completed', # Предполагаем, что после загрузки на Cloudinary видео готово к дальнейшей обработке
+                timestamp=datetime.now(),
+                cloudinary_url=cloudinary_url,
+                video_metadata=upload_result,
+                message='Video successfully uploaded to Cloudinary and full metadata obtained.'
             )
-            print(f"[{full_public_id}] Cloudinary response after new upload: {upload_result}")
-
-            if upload_result and upload_result.get('secure_url'):
-                cloudinary_url = upload_result['secure_url']
-                print(f"[{full_public_id}] Cloudinary URL: {cloudinary_url}")
-
-                # --- ПРОВЕРКА DURATION И ДРУГИХ ПОЛЕЙ ПОСЛЕ ЗАГРУЗКИ ---
-                new_upload_duration = upload_result.get('duration', 0)
-                new_upload_width = upload_result.get('width', 0)
-                new_upload_height = upload_result.get('height', 0)
-                new_upload_bytes = upload_result.get('bytes', 0)
-
-                if new_upload_duration <= 0 or new_upload_width <= 0 or new_upload_height <= 0 or new_upload_bytes <= 0:
-                    print(f"[{full_public_id}] CRITICAL WARNING: Video uploaded/re-uploaded, but essential metadata (duration/resolution/size) is still 0 or missing from Cloudinary response. Full metadata: {upload_result}")
-                    session.rollback()  
-                    return jsonify({
-                        'error': 'Video uploaded but could not retrieve complete and valid metadata from Cloudinary. Please try again or check video file.',
-                        'taskId': full_public_id,
-                        'cloudinary_url': cloudinary_url,
-                        'metadata': upload_result # Возвращаем все, что получили
-                    }), 500
-                # --- КОНЕЦ ПРОВЕРКИ DURATION И ДРУГИХ ПОЛЕЙ ПОСЛЕ ЗАГРУЗКИ ---
-
-                if existing_task:
-                    print(f"[{full_public_id}] Updating existing task in DB after re-upload with fresh metadata.")
-                    existing_task.instagram_username = instagram_username
-                    existing_task.email = email
-                    existing_task.linkedin_profile = linkedin_profile
-                    existing_task.original_filename = filename
-                    existing_task.status = 'completed'
-                    existing_task.timestamp = datetime.now()
-                    existing_task.cloudinary_url = cloudinary_url
-                    existing_task.video_metadata = upload_result # Обновляем метаданные из нового ответа
-                    existing_task.message = 'Video re-uploaded to Cloudinary and DB info updated with fresh metadata.'
-                else:
-                    print(f"[{full_public_id}] Creating a new task in DB after upload.")
-                    new_task = Task(
-                        task_id=full_public_id,
-                        instagram_username=instagram_username,
-                        email=email,
-                        linkedin_profile=linkedin_profile,
-                        original_filename=filename,
-                        status='completed',
-                        timestamp=datetime.now(),
-                        cloudinary_url=cloudinary_url,
-                        video_metadata=upload_result,
-                        message='Video successfully uploaded to Cloudinary and full metadata obtained.'
-                    )
-                    session.add(new_task)
-                    existing_task = new_task # Для единообразия возвращаемого значения
-                session.commit()
-                print(f"[{full_public_id}] DB changes successfully committed.")
-                return jsonify({'message': 'Video uploaded and task created/updated', 'taskId': existing_task.task_id, 'cloudinary_url': cloudinary_url, 'metadata': existing_task.video_metadata, 'originalFilename': existing_task.original_filename}), 200
-            else:
-                print(f"[{full_public_id}] Cloudinary upload failed: secure_url missing in response.")
-                return jsonify({'error': 'Cloudinary upload failed'}), 500
+            session.add(new_task)
+            session.commit()
+            print(f"[{task_id}] New task successfully created and committed to DB.")
+            return jsonify({
+                'message': 'Video uploaded and task created.',
+                'taskId': new_task.task_id, # Возвращаем новый уникальный task_id
+                'cloudinary_url': cloudinary_url,
+                'metadata': new_task.video_metadata,
+                'originalFilename': new_task.original_filename,
+                'status': new_task.status
+            }), 200
         else:
-            print(f"[{full_public_id}] Unexpected state: should_reupload was False, but no return was made. This indicates a logic error.")
-            return jsonify({'error': 'Internal server logic error'}), 500
+            print(f"[{task_id}] Cloudinary upload failed: secure_url missing in response.")
+            return jsonify({'error': 'Cloudinary upload failed'}), 500
 
     except SQLAlchemyError as e:
         session.rollback()
-        print(f"[{full_public_id if 'full_public_id' in locals() else 'N/A'}] Database error: {e}")
-        print(f"Original error info: {e.orig.pginfo if hasattr(e.orig, 'pginfo') else 'N/A'}")
+        print(f"[{task_id if 'task_id' in locals() else 'N/A'}] Database error during upload: {e}")
         return jsonify({'error': 'Database error', 'details': str(e)}), 500
     except Exception as e:
         session.rollback()
-        print(f"[{full_public_id if 'full_public_id' in locals() else 'N/A'}] An unexpected error occurred during upload: {e}")
+        print(f"[{task_id if 'task_id' in locals() else 'N/A'}] An unexpected error occurred during upload: {e}")
         return jsonify({'error': 'An unexpected error occurred', 'details': str(e)}), 500
     finally:
         session.close()
@@ -359,11 +261,12 @@ def get_task_status(task_id):
             print(f"[STATUS] Task with task_id '{task_id}' NOT FOUND in DB.")
             return jsonify({"message": "Task not found."}), 404
 
-        # Если статус задачи в нашей БД связан с Shotstack и она еще не завершена
-        if task_info.status == 'shotstack_pending' and task_info.shotstackRenderId:
-            print(f"[STATUS] Task {task_info.task_id} is in 'shotstack_pending' status. Checking Shotstack API...")
+        # Проверяем, является ли задача связанной с Shotstack рендерингом и еще не завершена
+        if task_info.shotstackRenderId and \
+           task_info.status not in ['completed', 'failed', 'concatenated_completed', 'concatenated_failed']:
+            print(f"[STATUS] Task {task_info.task_id} has Shotstack render ID. Checking Shotstack API...")
             try:
-                # <-- ИСПОЛЬЗУЕМ ФУНКЦИЮ ИЗ shotstack_service -->
+                # Используем функцию из shotstack_service для получения статуса рендера
                 status_info = shotstack_service.get_shotstack_render_status(task_info.shotstackRenderId)
 
                 shotstack_status = status_info['status']
@@ -373,29 +276,44 @@ def get_task_status(task_id):
                 print(f"[STATUS] Shotstack render status for {task_info.shotstackRenderId}: {shotstack_status}")
 
                 if shotstack_status == 'done' and shotstack_url:
-                    task_info.status = 'completed' # Или 'shotstack_completed' если хотите отдельный статус
+                    # Обновляем статус в нашей БД в зависимости от типа задачи
+                    if task_id.startswith('concatenated_video_'):
+                        task_info.status = 'concatenated_completed'
+                        task_info.message = "Concatenated video rendered successfully."
+                    else:
+                        task_info.status = 'completed'
+                        task_info.message = "Shotstack video rendered successfully."
                     task_info.shotstackUrl = shotstack_url
-                    task_info.message = "Shotstack video rendered successfully."
                     session.commit()
                     print(f"[STATUS] Shotstack render completed for {task_id}. URL: {shotstack_url}")
-                elif shotstack_status in ['failed', 'error']: # Пример статусов ошибок Shotstack
-                    task_info.status = 'failed'
-                    task_info.message = f"Shotstack rendering failed: {shotstack_error_message or 'Unknown Shotstack error'}"
+                elif shotstack_status in ['failed', 'error', 'failed_due_to_timeout']: # Добавлены возможные статусы ошибок
+                    if task_id.startswith('concatenated_video_'):
+                        task_info.status = 'concatenated_failed'
+                        task_info.message = f"Concatenated video rendering failed: {shotstack_error_message or 'Unknown Shotstack error'}"
+                    else:
+                        task_info.status = 'failed'
+                        task_info.message = f"Shotstack rendering failed: {shotstack_error_message or 'Unknown Shotstack error'}"
                     session.commit()
                     print(f"[STATUS] Shotstack render failed for {task_id}. Error: {task_info.message}")
                 else:
-                    # Рендеринг еще в процессе, ничего не меняем в task_info.status
+                    # Рендеринг еще в процессе, ничего не меняем в task_info.status, только сообщение
                     task_info.message = f"Shotstack render in progress: {shotstack_status}"
                     print(f"[STATUS] Shotstack render still in progress for {task_id}. Status: {shotstack_status}")
+                
+                # Обновляем поле status в to_dict, чтобы оно отражало текущее состояние
+                response_data = task_info.to_dict()
+                response_data['status'] = task_info.status # Убедимся, что возвращаемый статус актуален
+                return jsonify(response_data), 200
 
             except requests.exceptions.RequestException as e:
                 print(f"[STATUS] Error querying Shotstack API for {task_info.shotstackRenderId}: {e}")
                 task_info.message = f"Error checking Shotstack status: {e}"
-                session.rollback() # Откатываем любые изменения, если ошибка при запросе к Shotstack
+                # НЕ делаем session.rollback() здесь, так как мы только пытались обновить сообщение, а не данные
+                return jsonify(task_info.to_dict()), 200 # Возвращаем текущее состояние из БД, чтобы фронтенд мог обновить сообщение
             except Exception as e:
                 print(f"[STATUS] Unexpected error during Shotstack status check for {task_info.shotstackRenderId}: {e}")
                 task_info.message = f"Unexpected error during Shotstack status check: {e}"
-                session.rollback()
+                return jsonify(task_info.to_dict()), 200 # Возвращаем текущее состояние из БД
 
 
         print(f"[STATUS] Task found in DB: {task_info.task_id}, current_status: {task_info.status}")
@@ -430,12 +348,20 @@ def generate_shotstack_video():
         if not task.cloudinary_url:
             print(f"[SHOTSTACK] Task {task_id} has no Cloudinary URL. Cannot generate Shotstack video.")
             return jsonify({"error": "Video not uploaded to Cloudinary yet or URL missing."}), 400
+        
+        # Если видео уже в процессе рендеринга Shotstack, не запускаем повторно
+        if task.status == 'shotstack_pending' and task.shotstackRenderId:
+            print(f"[SHOTSTACK] Task {task_id} is already in 'shotstack_pending' status with render ID {task.shotstackRenderId}. Not re-initiating.")
+            return jsonify({
+                "message": "Shotstack render already initiated and in progress.",
+                "shotstackRenderId": task.shotstackRenderId
+            }), 200
 
-        # <-- ИСПОЛЬЗУЕМ ФУНКЦИЮ ИЗ shotstack_service -->
+        # Используем функцию из shotstack_service
         # Для этого эндпоинта всегда подразумеваем, что видео не объединяются
         render_id, message = shotstack_service.initiate_shotstack_render(
             cloudinary_video_url_or_urls=task.cloudinary_url, # Одиночный URL
-            video_metadata=task.video_metadata or {},
+            video_metadata=task.video_metadata or {}, # Одиночный словарь метаданных
             original_filename=task.original_filename,
             instagram_username=task.instagram_username,
             email=task.email,
@@ -473,19 +399,12 @@ def generate_shotstack_video():
     finally:
         session.close()
 
-
-## НОВЫЙ ЭНДПОИНТ: /process_videos
-
-# app.py
-
-# ... (ваш существующий импорт и настройки) ...
-
 @app.route('/process_videos', methods=['POST'])
 def process_videos():
     session = Session()
     try:
         data = request.json
-        task_ids = data.get('video_ids', [])
+        task_ids = data.get('task_ids', []) # Теперь ожидаем 'task_ids'
         connect_videos = data.get('connect_videos', False)
         instagram_username = data.get('instagram_username')
         email = data.get('email')
@@ -497,35 +416,37 @@ def process_videos():
             print("[PROCESS_VIDEOS] No task IDs provided.")
             return jsonify({"error": "No task IDs provided"}), 400
 
-        tasks = []
+        valid_tasks = []
         for tid in task_ids:
             task = session.query(Task).filter_by(task_id=tid).first()
-            if task and task.cloudinary_url and task.video_metadata:
-                tasks.append(task)
+            # Убеждаемся, что видео существует, загружено на Cloudinary и имеет метаданные
+            if task and task.cloudinary_url and task.video_metadata and task.status == 'completed':
+                valid_tasks.append(task)
             else:
-                print(f"[PROCESS_VIDEOS] Skipping task {tid}: not found, missing Cloudinary URL, or missing video metadata.")
+                print(f"[PROCESS_VIDEOS] Skipping task {tid}: not found, missing Cloudinary URL/metadata, or status not 'completed'.")
 
-        if not tasks:
-            print("[PROCESS_VIDEOS] No valid tasks found for provided IDs or Cloudinary URLs/metadata missing.")
+        if not valid_tasks:
+            print("[PROCESS_VIDEOS] No valid tasks found for provided IDs or Cloudinary URLs/metadata missing or not completed.")
             return jsonify({"error": "No valid tasks found for processing (missing or invalid data). Please ensure videos are uploaded and have full metadata."}), 404
 
         render_id = None
         message = ""
-        main_task = None
+        concatenated_task_id = None # Для нового ID объединенного видео
 
-        # --- НАЧАЛО ЛОГИКИ ОБРАБОТКИ ВИДЕО ВНУТРИ TRY ---
-        if connect_videos and len(tasks) >= 2:
-            print(f"[PROCESS_VIDEOS] Initiating concatenation for {len(tasks)} videos.")
+        if connect_videos and len(valid_tasks) >= 2:
+            print(f"[PROCESS_VIDEOS] Initiating concatenation for {len(valid_tasks)} videos.")
             
-            main_task = tasks[0]
-            cloudinary_video_urls = [t.cloudinary_url for t in tasks]
+            cloudinary_video_urls = [t.cloudinary_url for t in valid_tasks]
+            all_tasks_metadata = [t.video_metadata for t in valid_tasks]
 
-            all_tasks_metadata = [t.video_metadata for t in tasks if t.video_metadata]
-
+            # Создаем уникальное имя файла для объединенного видео
+            combined_filename_base = "_".join([t.original_filename.split('.')[0] for t in valid_tasks[:3]]) # Берем первые 3 имени
+            combined_filename = f"Combined_{combined_filename_base}_{hashlib.md5(str(time.time()).encode()).hexdigest()[:8]}.mp4"
+            
             render_id, message = shotstack_service.initiate_shotstack_render(
                 cloudinary_video_url_or_urls=cloudinary_video_urls,
                 video_metadata=all_tasks_metadata,
-                original_filename=f"Combined_Videos_{main_task.original_filename.split('.')[0]}",
+                original_filename=combined_filename, # Передаем уникальное имя для объединенного видео
                 instagram_username=instagram_username,
                 email=email,
                 linkedin_profile=linkedin_profile,
@@ -533,47 +454,112 @@ def process_videos():
             )
 
             if render_id:
-                main_task.shotstackRenderId = render_id
-                main_task.status = 'shotstack_pending'
-                main_task.message = f"Concatenated video render initiated with ID: {render_id}"
+                # Генерируем уникальный task_id для объединенного видео, чтобы оно появилось как новый "пузырек" на фронтенде
+                concatenated_task_id = f"concatenated_video_{render_id}" 
+                new_concatenated_task = Task(
+                    task_id=concatenated_task_id,
+                    instagram_username=instagram_username, # Привязываем к текущему пользователю
+                    email=email,
+                    linkedin_profile=linkedin_profile,
+                    original_filename=combined_filename,
+                    status='concatenated_pending', # Новый статус
+                    timestamp=datetime.now(),
+                    cloudinary_url=None, # Cloudinary URL будет, когда Shotstack завершит и мы его получим
+                    video_metadata={
+                        "combined_from_tasks": [t.task_id for t in valid_tasks],
+                        "total_duration": sum(m.get('duration', 0) for m in all_tasks_metadata if m)
+                    }, # Метаданные для объединенного видео
+                    message=f"Concatenated video render initiated with ID: {render_id}",
+                    shotstackRenderId=render_id,
+                    shotstackUrl=None
+                )
+                session.add(new_concatenated_task)
                 session.commit()
-                print(f"[PROCESS_VIDEOS] Shotstack render initiated for connected videos. Render ID: {render_id}")
+                print(f"[PROCESS_VIDEOS] Shotstack render initiated for connected videos. New Task ID: {concatenated_task_id}, Render ID: {render_id}")
             else:
                 session.rollback()
                 print(f"[PROCESS_VIDEOS] Shotstack API did not return a render ID for connected videos. Unexpected.")
                 return jsonify({"error": "Failed to get Shotstack render ID for concatenated video. (Service issue)"}), 500
 
-            return jsonify({"message": message, "shotstackRenderId": render_id, "mainTaskId": main_task.task_id}), 200
+        else: # Сценарий: индивидуальная обработка видео (даже если выбрано одно)
+            # В этом случае, мы берем каждое выбранное видео и запускаем для него генерацию Shotstack
+            # Мы ожидаем, что фронтенд обрабатывает это как несколько отдельных задач
+            # и обновляет их статусы.
+            # Если фронтенд передает 1 видео и connect_videos = False, это будет "переобработка"
+            # Если фронтенд передает >1 видео и connect_videos = False, это будет
+            # запуск Shotstack для каждого из них по отдельности.
+            
+            # Обновляем статусы всех выбранных видео до 'shotstack_pending'
+            # и инициируем рендеринг для каждого.
+            initiated_tasks_info = []
+            for task in valid_tasks:
+                if task.status != 'completed': # Пропускаем, если видео уже не в состоянии "completed"
+                    print(f"[PROCESS_VIDEOS] Skipping individual processing for task {task.task_id}: not in 'completed' status.")
+                    continue
 
-        else: # <--- ЭТО ЕДИНСТВЕННЫЙ БЛОК ELSE ДЛЯ ЭТОГО IF
-            print(f"[PROCESS_VIDEOS] Initiating single video processing for {tasks[0].task_id}.")
-            main_task = tasks[0]
+                if task.shotstackRenderId and task.status == 'shotstack_pending':
+                    print(f"[PROCESS_VIDEOS] Task {task.task_id} already processing with Shotstack ID {task.shotstackRenderId}. Skipping re-initiation.")
+                    initiated_tasks_info.append({
+                        "taskId": task.task_id,
+                        "shotstackRenderId": task.shotstackRenderId,
+                        "message": "Already processing."
+                    })
+                    continue
 
-            video_metadata_for_single = main_task.video_metadata.copy() if main_task.video_metadata else {}
+                try:
+                    render_id_single, message_single = shotstack_service.initiate_shotstack_render(
+                        cloudinary_video_url_or_urls=task.cloudinary_url,
+                        video_metadata=task.video_metadata or {},
+                        original_filename=task.original_filename,
+                        instagram_username=instagram_username,
+                        email=email,
+                        linkedin_profile=linkedin_profile,
+                        connect_videos=False
+                    )
 
-            render_id, message = shotstack_service.initiate_shotstack_render(
-                cloudinary_video_url_or_urls=main_task.cloudinary_url,
-                video_metadata=video_metadata_for_single,
-                original_filename=main_task.original_filename,
-                instagram_username=instagram_username,
-                email=email,
-                linkedin_profile=linkedin_profile,
-                connect_videos=False
-            )
+                    if render_id_single:
+                        task.shotstackRenderId = render_id_single
+                        task.status = 'shotstack_pending'
+                        task.message = f"Shotstack render initiated with ID: {render_id_single}"
+                        session.add(task) # Добавляем для обновления
+                        print(f"[PROCESS_VIDEOS] Shotstack render initiated for single video {task.original_filename}. Render ID: {render_id_single}")
+                        initiated_tasks_info.append({
+                            "taskId": task.task_id,
+                            "shotstackRenderId": render_id_single,
+                            "message": message_single
+                        })
+                    else:
+                        print(f"[PROCESS_VIDEOS] Shotstack API did not return a render ID for single video {task.task_id}. Unexpected.")
+                        initiated_tasks_info.append({
+                            "taskId": task.task_id,
+                            "error": "Failed to get Shotstack render ID for single video."
+                        })
+                except Exception as e:
+                    print(f"[PROCESS_VIDEOS] Error initiating Shotstack for task {task.task_id}: {e}")
+                    initiated_tasks_info.append({
+                        "taskId": task.task_id,
+                        "error": str(e)
+                    })
+            
+            session.commit() # Коммитим все изменения статусов
+            return jsonify({
+                "message": "Individual video processing initiated.",
+                "initiated_tasks": initiated_tasks_info
+                # "concatenated_task_id": None # Явно указываем, что объединенного ID нет
+            }), 200
 
-            if render_id:
-                main_task.shotstackRenderId = render_id
-                main_task.status = 'shotstack_pending'
-                main_task.message = f"Single video render initiated with ID: {render_id}"
-                session.commit()
-                print(f"[PROCESS_VIDEOS] Shotstack render initiated for {main_task.original_filename}. Render ID: {render_id}")
-            else:
-                session.rollback()
-                print(f"[PROCESS_VIDEOS] Shotstack API did not return a render ID for single video {main_task.task_id}. Unexpected.")
-                return jsonify({"error": "Failed to get Shotstack render ID for single video. (Service issue)"}), 500
+        # Единый возврат для успешного объединения
+        if connect_videos and concatenated_task_id:
+            return jsonify({
+                "message": message,
+                "shotstackRenderId": render_id,
+                "concatenated_task_id": concatenated_task_id # Отправляем новый ID на фронтенд
+            }), 200
+        elif connect_videos and not concatenated_task_id:
+             # Если сюда дошли, значит, что-то пошло не так в логике объединения, но без исключения
+             print("[PROCESS_VIDEOS] Logic error: connect_videos is True but concatenated_task_id is None.")
+             return jsonify({"error": "Failed to initiate concatenation due to an internal logic error."}), 500
 
-            return jsonify({"message": message, "shotstackRenderId": render_id, "mainTaskId": main_task.task_id}), 200
-        # --- КОНЕЦ ЛОГИКИ ОБРАБОТКИ ВИДЕО ВНУТРИ TRY ---
 
     except SQLAlchemyError as e:
         session.rollback()
@@ -589,8 +575,6 @@ def process_videos():
         return jsonify({"error": "An unexpected server error occurred.", "details": str(e)}), 500
     finally:
         session.close()
-
-# ... (ваш остальной код, например, функция get_task_status и generate_shotstack_video) ...
 
 @app.route('/heavy-tasks/pending', methods=['GET'])
 def get_heavy_tasks():
@@ -669,7 +653,7 @@ def test_shotstack_simple_connection():
                 "shotstackResponse": shotstack_result
             }), 200
         else:
-            print(f"[TEST_SHOTSTACK_SIMPLE] Failed to get Shotstack render ID. Full response: {shotstack_result}")
+            print(f"[TEST_SHOTSTACK_SIMPLE] Failed to get Shotstack render ID. Full response: {json.dumps(shotstack_result, indent=2)}")
             return jsonify({
                 "status": "error",
                 "message": "Failed to get Shotstack render ID.",
