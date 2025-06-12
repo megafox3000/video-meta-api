@@ -17,7 +17,7 @@ def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, 
     """
     Создает JSON-payload для запроса к Shotstack API.
     Поддерживает объединение нескольких видео путем добавления нескольких клипов в одну дорожку,
-    добавляет текстовые наложения, случайные переходы и использует кастомный шрифт.
+    удаляя все наложения (текст, изображения) и шрифты.
 
     :param cloudinary_video_url_or_urls: Список URL Cloudinary видео (если connect_videos=True)
                                          Или одиночный URL (если connect_videos=False)
@@ -25,9 +25,9 @@ def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, 
                                  или метаданные одного видео (когда connect_videos=False).
                                  Должен содержать 'duration', 'width', 'height' для каждого.
     :param original_filename: Имя файла (для логирования/названия)
-    :param instagram_username: Имя пользователя Instagram для наложения
-    :param email: Email пользователя.
-    :param linkedin_profile: Профиль LinkedIn пользователя.
+    :param instagram_username: Имя пользователя Instagram для наложения (не используется для рендеринга, но сохраняется для совместимости)
+    :param email: Email пользователя (не используется для рендеринга, но сохраняется для совместимости)
+    :param linkedin_profile: Профиль LinkedIn пользователя (не используется для рендеринга, но сохраняется для совместимости)
     :param connect_videos: Флаг, указывающий, нужно ли объединять видео.
     """
     if not isinstance(video_metadata_list, list):
@@ -44,8 +44,7 @@ def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, 
     width = first_video_metadata.get('width', 1920)
     height = first_video_metadata.get('height', 1080)
 
-    cleaned_username = "".join(c for c in (instagram_username or '').strip() if c.isalnum() or c in ('_', '-')).strip()
-    username_display_text = f"@{cleaned_username}" if cleaned_username else "Video Analysis"
+    # Логика для `display_username` и `merge` удалена, так как текстовых наложений нет.
 
     output_resolution = "sd"
     aspect_ratio = "16:9"
@@ -76,7 +75,7 @@ def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, 
                     "src": url
                 },
                 "start": current_start_time,
-                "length": clip_duration
+                "length": clip_duration 
             }
             
             if i > 0:
@@ -99,17 +98,11 @@ def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, 
         total_duration = single_video_duration
 
     payload = {
+        # Параметр "merge" удален, так как нет текстовых плейсхолдеров
         "timeline": {
-            "fonts": [
-                {
-                    "src": "https://shotstack-assets.s3.amazonaws.com/fonts/Cousine.ttf" 
-                }
-            ],
+            "fonts": [], # Массив "fonts" пуст, так как шрифты не используются
             "tracks": [
-                {   # ДОРОЖКА 1: ДЛЯ ТЕКСТА - INDEX 0 (как вы просили)
-                    "clips": [] 
-                },
-                {   # ДОРОЖКА 2: ДЛЯ ВИДЕОКЛИПОВ - INDEX 1 (как вы просили)
+                {   # ЕДИНСТВЕННАЯ ДОРОЖКА: ДЛЯ ВСЕХ ВИДЕОКЛИПОВ
                     "clips": video_clips 
                 }
             ],
@@ -119,54 +112,15 @@ def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, 
             "format": "mp4",
             "resolution": output_resolution,
             "aspectRatio": aspect_ratio,
-            "poster": {
-                "capture": 1
+            "poster": { # Запрос на создание постера для объединенного видео остается
+                "format": "jpg",
+                "quality": 75,
+                "capture": "00:00:01.000" # Захватить кадр на 1-й секунде
             }
         }
     }
 
-    # Добавляем текстовые наложения на дорожку 0
-    if connect_videos:
-        # Текст для объединенного видео (вверху)
-        payload["timeline"]["tracks"][0]["clips"].append({ 
-            "asset": {
-                "type": "text",
-                "text": "COMBINED VIDEO", 
-                "font": {
-                    "family": "Cousine", 
-                    "color": "#FFFFFF",
-                    "size": 70
-                },
-                "alignment": { "horizontal": "center", "vertical": "top" },
-                "width": 1280,
-                "height": 150,
-                "effect": "zoomIn"
-            },
-            "start": 0,
-            "length": "end", 
-            "position": "top",
-            "offset": { "y": "0.1" }
-        })
-
-    # Добавляем имя пользователя (или общий текст) внизу
-    payload["timeline"]["tracks"][0]["clips"].append({ 
-        "asset": {
-            "type": "text",
-            "text": username_display_text,
-            "font": {
-                "family": "Cousine", 
-                "color": "#FFFFFF",
-                "size": 40
-            },
-            "alignment": { "horizontal": "center", "vertical": "bottom" },
-            "width": 960,
-            "height": 100
-        },
-        "start": 0,
-        "length": "end", 
-        "position": "bottom",
-        "offset": { "y": "-0.1" }
-    })
+    # Логика добавления текстовых наложений удалена.
 
     return payload
 
@@ -262,13 +216,13 @@ def get_shotstack_render_status(render_id):
         result = response.json()
         status = result.get('response', {}).get('status')
         url = result.get('response', {}).get('url')
-        poster_url = result.get('response', {}).get('poster') 
+        poster_url = result.get('response', {}).get('poster')
         error_message = result.get('response', {}).get('message')
 
         return {
             "status": status,
             "url": url,
-            "poster": poster_url, 
+            "poster": poster_url,
             "error_message": error_message
         }
 
@@ -277,11 +231,11 @@ def get_shotstack_render_status(render_id):
         print(f"[ShotstackService] ОШИБКА: {error_message}")
         raise requests.exceptions.RequestException(error_message) from e
     except requests.exceptions.ConnectionError as e:
-        error_message = f"Ошибка подключения к Shotstack: {e}"
+        error_message = f"Ошибка подключения к Shotstack API статуса: {e}"
         print(f"[ShotstackService] ОШИБКА: {error_message}")
         raise requests.exceptions.RequestException(error_message) from e
     except requests.exceptions.Timeout as e:
-        error_message = f"Тайм-аут при подключении к Shotstack: {e}"
+        error_message = f"Тайм-аут при подключении к Shotstack API статуса: {e}"
         print(f"[ShotstackService] ОШИБКА: {e}")
         raise requests.exceptions.RequestException(error_message) from e
     except Exception as e:
