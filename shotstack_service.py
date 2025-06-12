@@ -1,11 +1,23 @@
 import os
 import requests
 import json
+import random # НОВОЕ: Импортируем модуль random для случайных переходов
+
+# НОВОЕ: Определяем список доступных переходов Shotstack
+AVAILABLE_TRANSITIONS = [
+    "fade",
+    "slideLeft",
+    "slideRight",
+    "wipeLeft",
+    "wipeRight",
+    "dissolve"
+]
 
 def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, original_filename, instagram_username, email, linkedin_profile, connect_videos=False):
     """
     Создает JSON-payload для запроса к Shotstack API.
-    Поддерживает объединение нескольких видео путем добавления нескольких клипов в одну дорожку.
+    Поддерживает объединение нескольких видео путем добавления нескольких клипов в одну дорожку,
+    добавляет текстовые наложения и случайные переходы.
 
     :param cloudinary_video_url_or_urls: Список URL Cloudinary видео (если connect_videos=True)
                                          Или одиночный URL (если connect_videos=False)
@@ -52,7 +64,7 @@ def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, 
     # Для очень маленьких видео Shotstack масштабирует их.
 
     if width > height:
-        aspect_ratio = "16:9" # Горизонтальная ориентация
+        aspect_ratio = "9:16" # Вертикальная ориентация
     elif height > width:
         aspect_ratio = "9:16" # Вертикальная ориентация
     else:
@@ -70,14 +82,22 @@ def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, 
             clip_metadata = processed_metadata_list[i] if i < len(processed_metadata_list) else {}
             clip_duration = clip_metadata.get('duration', 5.0) # Использовать длительность каждого клипа
             
-            video_clips.append({
+            clip_definition = {
                 "asset": {
                     "type": "video",
                     "src": url
                 },
                 "start": current_start_time,
                 "length": clip_duration # Явно указываем длительность каждого клипа
-            })
+            }
+            
+            # НОВОЕ: Добавляем случайный переход для всех клипов, кроме первого
+            if i > 0:
+                random_transition_type = random.choice(AVAILABLE_TRANSITIONS)
+                clip_definition["transition"] = {"in": random_transition_type, "length": 0.5} # Длительность перехода 0.5 секунды
+                print(f"[ShotstackService] Добавлен переход '{random_transition_type}' для клипа {i+1}.")
+
+            video_clips.append(clip_definition)
             current_start_time += clip_duration # Обновляем время начала для следующего клипа
     else:
         # Если не объединяем или передан одиночный URL
@@ -100,23 +120,7 @@ def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, 
                     "clips": video_clips # Здесь будут все видеоклипы
                 },
                 {   # ДОРОЖКА 2: ДЛЯ ТЕКСТОВОГО НАЛОЖЕНИЯ
-                    "clips": [
-                        {
-                            "asset": {
-                                "type": "title",
-                                "text": title_text,
-                                "style": "minimal",
-                                "color": "#FFFFFF",
-                                "size": "large"
-                            },
-                            "start": 0,
-                            "length": total_duration, # Длительность текста равна ОБЩЕЙ длительности видео
-                            "position": "bottom",
-                            "offset": {
-                                "y": "-0.2"
-                            }
-                        }
-                    ]
+                    "clips": [] # Инициализируем пустой список клипов для текста. Будет заполнен ниже.
                 }
             ],
             "background": "#000000" # Черный фон
@@ -126,12 +130,47 @@ def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, 
             "resolution": output_resolution,
             "aspectRatio": aspect_ratio,
             "poster": {
-                # "format": "jpg", # Эта строка была удалена ранее
-                # "quality": 75,   # <--- УДАЛИТЕ ЭТУ СТРОКУ
-                "capture": 1
+                "capture": 1 # Захватить кадр на 1-й секунде
             }
         }
     }
+
+    # НОВОЕ: Добавляем тексты в зависимости от того, объединенное это видео или нет
+    if connect_videos:
+        # Текст для объединенного видео (вверху)
+        payload["timeline"]["tracks"][1]["clips"].append({
+            "asset": {
+                "type": "title",
+                "text": "Объединенное Видео", # НОВОЕ: Специальный текст для объединенного видео
+                "style": "minimal",
+                "color": "#FFFFFF",
+                "size": "large"
+            },
+            "start": 0,
+            "length": total_duration,
+            "position": "top", # НОВОЕ: Позиционирование вверху
+            "offset": {
+                "y": "0.2" # Небольшое смещение от края
+            }
+        })
+
+    # Добавляем имя пользователя (или общий текст) внизу
+    # Это будет присутствовать как для объединенных, так и для одиночных видео
+    payload["timeline"]["tracks"][1]["clips"].append({
+        "asset": {
+            "type": "title",
+            "text": title_text, # Используем уже сгенерированный title_text (т.е. @username или "Video Analysis")
+            "style": "minimal",
+            "color": "#FFFFFF",
+            "size": "large"
+        },
+        "start": 0,
+        "length": total_duration,
+        "position": "bottom",
+        "offset": {
+            "y": "-0.2"
+        }
+    })
 
     return payload
 
