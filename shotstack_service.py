@@ -127,7 +127,7 @@ def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, 
 
     if connect_videos:
         # Текст для объединенного видео (вверху)
-        payload["timeline"]["tracks"][0]["clips"].append({ # <--- ИЗМЕНЕНИЕ: Теперь clips[0]
+        payload["timeline"]["tracks"][0]["clips"].append({
             "asset": {
                 "type": "text",
                 "text": "ОБЪЕДИНЕННОЕ ВИДЕО",
@@ -142,13 +142,13 @@ def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, 
                 "effect": "zoomIn"
             },
             "start": 0,
-            "length": total_duration,
+            "length": "end", # <--- ИЗМЕНЕНИЕ ЗДЕСЬ: "end" вместо total_duration
             "position": "top",
             "offset": { "y": "0.1" }
         })
 
     # Добавляем имя пользователя (или общий текст) внизу
-    payload["timeline"]["tracks"][0]["clips"].append({ # <--- ИЗМЕНЕНИЕ: Теперь clips[0]
+    payload["timeline"]["tracks"][0]["clips"].append({
         "asset": {
             "type": "text",
             "text": username_display_text,
@@ -162,7 +162,7 @@ def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, 
             "height": 100
         },
         "start": 0,
-        "length": total_duration,
+        "length": "end", # <--- ИЗМЕНЕНИЕ ЗДЕСЬ: "end" вместо total_duration
         "position": "bottom",
         "offset": { "y": "-0.1" }
     })
@@ -235,7 +235,7 @@ def initiate_shotstack_render(cloudinary_video_url_or_urls, video_metadata, orig
         print(f"[ShotstackService] ОШИБКА: {e}")
         raise requests.exceptions.RequestException(error_message) from e
     except Exception as e:
-        error_message = f"Произошла непредвиденная ошибка при вызове Shotstack API: {e}"
+        error_message = f"Произошла непредвиденная ошибка при вызове Shotstack API статуса: {e}"
         print(f"[ShotstackService] ОШИБКА: {error_message}")
         raise Exception(error_message) from e
 
