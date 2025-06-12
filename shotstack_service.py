@@ -1,9 +1,9 @@
 import os
 import requests
 import json
-import random # НОВОЕ: Импортируем модуль random для случайных переходов
+import random
 
-# НОВОЕ: Определяем список доступных переходов Shotstack
+# Определяем список доступных переходов Shotstack
 AVAILABLE_TRANSITIONS = [
     "fade",
     "slideLeft",
@@ -17,7 +17,7 @@ def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, 
     """
     Создает JSON-payload для запроса к Shotstack API.
     Поддерживает объединение нескольких видео путем добавления нескольких клипов в одну дорожку,
-    добавляет текстовые наложения и случайные переходы.
+    добавляет текстовые наложения, случайные переходы и использует кастомный шрифт.
 
     :param cloudinary_video_url_or_urls: Список URL Cloudinary видео (если connect_videos=True)
                                          Или одиночный URL (если connect_videos=False)
@@ -30,57 +30,43 @@ def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, 
     :param linkedin_profile: Профиль LinkedIn пользователя
     :param connect_videos: Флаг, указывающий, нужно ли объединять видео.
     """
-    # Если connect_videos=True, ожидаем список метаданных.
-    # Если connect_videos=False, ожидаем один словарь метаданных.
-    # Чтобы упростить логику, всегда работаем со списком, преобразуя одиночные метаданные в список из одного элемента.
     if not isinstance(video_metadata_list, list):
-        # Если переданы одиночные метаданные, преобразуем их в список из одного элемента
         processed_metadata_list = [video_metadata_list]
     else:
         processed_metadata_list = video_metadata_list
 
-    # Для определения общей длительности и разрешения/соотношения сторон для выходного видео
-    # Если объединяем, берем суммарную длительность и параметры первого видео как базовые
-    # Если не объединяем, берем параметры единственного видео
     total_duration = sum(m.get('duration', 0) for m in processed_metadata_list if m)
     
-    # Берем ширину/высоту из первого видео в списке для определения разрешения выходного файла
-    # Это важно, так как Shotstack использует их для Canvas.
     first_video_metadata = processed_metadata_list[0] if processed_metadata_list else {}
-    width = first_video_metadata.get('width', 1920) # По умолчанию 1080p, если не найдено
-    height = first_video_metadata.get('height', 1080) # По умолчанию 1080p, если не найдено
+    width = first_video_metadata.get('width', 1920)
+    height = first_video_metadata.get('height', 1080)
 
-    # Используем cleaned_username для заголовка
     cleaned_username = "".join(c for c in (instagram_username or '').strip() if c.isalnum() or c in ('_', '-')).strip()
-    title_text = f"@{cleaned_username}" if cleaned_username else "Video Analysis"
+    # Текст для имени пользователя теперь всегда будет "@username" или "Video Analysis"
+    username_display_text = f"@{cleaned_username}" if cleaned_username else "Video Analysis"
 
-    output_resolution = "sd" # По умолчанию
-    aspect_ratio = "16:9" # По умолчанию
+    output_resolution = "sd"
+    aspect_ratio = "16:9"
 
-    if width >= 1920 or height >= 1080: # Проверяем на HD (1080p и выше)
+    if width >= 1920 or height >= 1080:
         output_resolution = "hd"
-    elif width >= 1280 or height >= 720: # Проверяем на SD (720p)
+    elif width >= 1280 or height >= 720:
         output_resolution = "sd"
-    # Для очень маленьких видео Shotstack масштабирует их.
 
     if width > height:
-        aspect_ratio = "9:16" # Вертикальная ориентация
+        aspect_ratio = "9:16" # Вертикальная ориентация для мобильных
     elif height > width:
-        aspect_ratio = "9:16" # Вертикальная ориентация
+        aspect_ratio = "9:16" # Вертикальная ориентация для мобильных
     else:
         aspect_ratio = "1:1" # Квадрат
 
-    # --- Создание клипов для видео ---
     video_clips = []
     current_start_time = 0.0
 
     if connect_videos and isinstance(cloudinary_video_url_or_urls, list):
-        # Если объединяем, то cloudinary_video_url_or_urls - это список URL
-        # и video_metadata_list должен быть списком метаданных, соответствующих этим URL.
-        # Необходимо использовать длительность КАЖДОГО видео для правильного позиционирования клипов.
         for i, url in enumerate(cloudinary_video_url_or_urls):
             clip_metadata = processed_metadata_list[i] if i < len(processed_metadata_list) else {}
-            clip_duration = clip_metadata.get('duration', 5.0) # Использовать длительность каждого клипа
+            clip_duration = clip_metadata.get('duration', 5.0)
             
             clip_definition = {
                 "asset": {
@@ -88,88 +74,111 @@ def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, 
                     "src": url
                 },
                 "start": current_start_time,
-                "length": clip_duration # Явно указываем длительность каждого клипа
+                "length": clip_duration
             }
             
-            # НОВОЕ: Добавляем случайный переход для всех клипов, кроме первого
+            # Добавляем случайный переход "вход" и "выход" для всех клипов, кроме первого (у которого только "out")
+            # Или просто "in" для второго и последующих, а "out" для всех, кроме последнего.
+            # Для простоты добавим "in" для всех, кроме первого, и "out" для всех клипов.
             if i > 0:
-                random_transition_type = random.choice(AVAILABLE_TRANSITIONS)
-                clip_definition["transition"] = {"in": random_transition_type, "length": 0.5} # Длительность перехода 0.5 секунды
-                print(f"[ShotstackService] Добавлен переход '{random_transition_type}' для клипа {i+1}.")
+                random_in_transition = random.choice(AVAILABLE_TRANSITIONS)
+                clip_definition["transition"] = {"in": random_in_transition}
+                print(f"[ShotstackService] Добавлен переход 'in': '{random_in_transition}' для клипа {i+1}.")
+            
+            # Добавляем случайный переход 'out' для каждого клипа (кроме последнего при объединении,
+            # но Shotstack сам управится с концом видео)
+            # В данном случае, для видеоклипов достаточно только 'in' для переходов между ними.
+            # 'out' переход может быть актуален для последнего клипа, если за ним ничего нет.
+            # Для склейки между клипами достаточно 'in' для следующего клипа.
+            # Оставляем только 'in' как и в предыдущей версии, но сделаем его более явным в JSON.
+            # Если хотим 'in' и 'out' для каждого клипа, то это выглядит так:
+            # clip_definition["transition"] = {
+            #     "in": random_in_transition if i > 0 else "fade", # Первый клип может просто появиться
+            #     "out": random.choice(AVAILABLE_TRANSITIONS)
+            # }
 
             video_clips.append(clip_definition)
-            current_start_time += clip_duration # Обновляем время начала для следующего клипа
+            current_start_time += clip_duration
     else:
-        # Если не объединяем или передан одиночный URL
-        # Здесь processed_metadata_list содержит один элемент
         single_video_duration = processed_metadata_list[0].get('duration', 5.0) if processed_metadata_list else 5.0
         video_clips.append({
             "asset": {
                 "type": "video",
-                "src": cloudinary_video_url_or_urls # Здесь ожидается один URL
+                "src": cloudinary_video_url_or_urls
             },
-            "length": single_video_duration, # Используем длительность для одиночного видео
+            "length": single_video_duration,
             "start": 0
         })
-        total_duration = single_video_duration # Обновляем общую длительность для одного видео
+        total_duration = single_video_duration
 
     payload = {
         "timeline": {
-            "tracks": [
-                {   # ДОРОЖКА 1: ДЛЯ ВИДЕОКЛИПОВ (одного или нескольких)
-                    "clips": video_clips # Здесь будут все видеоклипы
-                },
-                {   # ДОРОЖКА 2: ДЛЯ ТЕКСТОВОГО НАЛОЖЕНИЯ
-                    "clips": [] # Инициализируем пустой список клипов для текста. Будет заполнен ниже.
+            "fonts": [ # НОВОЕ: Добавляем пользовательский шрифт
+                {
+                    "src": "https://templates.shotstack.io/basic-edits-title-image-video/2c0f2023-e18e-4a6c-829d-48d6896c561b/Roboto-Black.ttf"
                 }
             ],
-            "background": "#000000" # Черный фон
+            "tracks": [
+                {   # ДОРОЖКА 1: ДЛЯ ВИДЕОКЛИПОВ
+                    "clips": video_clips
+                },
+                {   # ДОРОЖКА 2: ДЛЯ ТЕКСТОВОГО НАЛОЖЕНИЯ
+                    "clips": []
+                }
+            ],
+            "background": "#000000"
         },
         "output": {
             "format": "mp4",
             "resolution": output_resolution,
             "aspectRatio": aspect_ratio,
             "poster": {
-                "capture": 1 # Захватить кадр на 1-й секунде
+                "capture": 1
             }
         }
     }
 
-    # НОВОЕ: Добавляем тексты в зависимости от того, объединенное это видео или нет
+    # НОВОЕ: Добавляем тексты с использованием 'type: "text"' и расширенными опциями
     if connect_videos:
         # Текст для объединенного видео (вверху)
         payload["timeline"]["tracks"][1]["clips"].append({
             "asset": {
-                "type": "title",
-                "text": "Объединенное Видео", # НОВОЕ: Специальный текст для объединенного видео
-                "style": "minimal",
-                "color": "#FFFFFF",
-                "size": "large"
+                "type": "text", # Изменено с "title" на "text"
+                "text": "ОБЪЕДИНЕННОЕ ВИДЕО", # Улучшенный текст
+                "font": { # Используем загруженный шрифт
+                    "family": "Roboto Black", 
+                    "color": "#FFFFFF",
+                    "size": 70 # Увеличенный размер для заголовка
+                },
+                "alignment": { "horizontal": "center", "vertical": "top" }, # Центрирование по горизонтали, выравнивание по верху
+                "width": 1280, # Примерные размеры для текста
+                "height": 150,
+                "effect": "zoomIn" # Эффект приближения
             },
             "start": 0,
             "length": total_duration,
-            "position": "top", # НОВОЕ: Позиционирование вверху
-            "offset": {
-                "y": "0.2" # Небольшое смещение от края
-            }
+            "position": "top",
+            "offset": { "y": "0.1" } # Небольшое смещение от края
         })
 
     # Добавляем имя пользователя (или общий текст) внизу
-    # Это будет присутствовать как для объединенных, так и для одиночных видео
     payload["timeline"]["tracks"][1]["clips"].append({
         "asset": {
-            "type": "title",
-            "text": title_text, # Используем уже сгенерированный title_text (т.е. @username или "Video Analysis")
-            "style": "minimal",
-            "color": "#FFFFFF",
-            "size": "large"
+            "type": "text", # Изменено с "title" на "text"
+            "text": username_display_text, # Используем уже сгенерированный текст (@username или "Video Analysis")
+            "font": { # Используем более простой шрифт для основного текста
+                "family": "Arial", 
+                "color": "#FFFFFF",
+                "size": 40
+            },
+            "alignment": { "horizontal": "center", "vertical": "bottom" }, # Центрирование по горизонтали, выравнивание по низу
+            "width": 960, # Примерные размеры для текста
+            "height": 100
         },
         "start": 0,
         "length": total_duration,
         "position": "bottom",
-        "offset": {
-            "y": "-0.2"
-        }
+        "offset": { "y": "-0.1" }
     })
 
     return payload
@@ -191,13 +200,8 @@ def initiate_shotstack_render(cloudinary_video_url_or_urls, video_metadata, orig
         "x-api-key": shotstack_api_key
     }
 
-    # Если connect_videos=True, video_metadata должен быть списком метаданных.
-    # Если connect_videos=False, video_metadata должен быть одним словарем метаданных.
-    # Это изменение в сигнатуре функции initiate_shotstack_render, чтобы app.py мог передавать
-    # СПИСОК метаданных для каждого видео при объединении.
     if connect_videos and not isinstance(video_metadata, list):
         print("[ShotstackService] ПРЕДУПРЕЖДЕНИЕ: connect_videos равно True, но video_metadata не является списком. Это может привести к некорректному рендерингу.")
-        # Попытаемся преобразовать для дальнейшей работы, если это возможно.
         video_metadata_for_payload = [video_metadata] if video_metadata else []
     elif not connect_videos and isinstance(video_metadata, list):
         print("[ShotstackService] ПРЕДУПРЕЖДЕНИЕ: connect_videos равно False, но video_metadata является списком. Используем первый элемент.")
@@ -207,13 +211,13 @@ def initiate_shotstack_render(cloudinary_video_url_or_urls, video_metadata, orig
 
 
     payload = create_shotstack_payload(
-        cloudinary_video_url_or_urls, # Это может быть список или одиночный URL
-        video_metadata_for_payload, # Передаем обработанные метаданные
+        cloudinary_video_url_or_urls,
+        video_metadata_for_payload,
         original_filename,
         instagram_username,
         email,
         linkedin_profile,
-        connect_videos # Передаем флаг
+        connect_videos
     )
 
     print(f"[ShotstackService] Отправка запроса в Shotstack API для {original_filename} (Объединение видео: {connect_videos})...")
@@ -230,7 +234,6 @@ def initiate_shotstack_render(cloudinary_video_url_or_urls, video_metadata, orig
             return render_id, "Рендеринг успешно поставлен в очередь."
         else:
             print(f"[ShotstackService] ОШИБКА: Shotstack API не вернул ID рендеринга. Ответ: {json.dumps(result, indent=2)}")
-            # Более специфичное исключение, если нет ID
             raise RuntimeError("Shotstack API не вернул ID рендеринга после успешного запроса.")
 
     except requests.exceptions.HTTPError as e:
@@ -287,11 +290,11 @@ def get_shotstack_render_status(render_id):
         print(f"[ShotstackService] ОШИБКА: {error_message}")
         raise requests.exceptions.RequestException(error_message) from e
     except requests.exceptions.ConnectionError as e:
-        error_message = f"Ошибка подключения к Shotstack API статуса: {e}"
+        error_message = f"Ошибка подключения к Shotstack: {e}"
         print(f"[ShotstackService] ОШИБКА: {error_message}")
         raise requests.exceptions.RequestException(error_message) from e
     except requests.exceptions.Timeout as e:
-        error_message = f"Тайм-аут при подключении к Shotstack API статуса: {e}"
+        error_message = f"Тайм-аут при подключении к Shotstack: {e}"
         print(f"[ShotstackService] ОШИБКА: {error_message}")
         raise requests.exceptions.RequestException(error_message) from e
     except Exception as e:
