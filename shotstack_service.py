@@ -126,9 +126,9 @@ def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, 
             "resolution": output_resolution,
             "aspectRatio": aspect_ratio,
             "poster": {
-                # "format": "jpg", # <--- УДАЛЕНА ЭТА СТРОКА: "format" не разрешен здесь
-                "quality": 75,
-                "capture": 1 
+                # "format": "jpg", # Эта строка была удалена ранее
+                # "quality": 75,   # <--- УДАЛИТЕ ЭТУ СТРОКУ
+                "capture": 1
             }
         }
     }
