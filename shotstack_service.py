@@ -228,11 +228,13 @@ def get_shotstack_render_status(render_id):
         result = response.json()
         status = result.get('response', {}).get('status')
         url = result.get('response', {}).get('url')
+        poster_url = result.get('response', {}).get('poster')
         error_message = result.get('response', {}).get('message')
 
         return {
             "status": status,
             "url": url,
+            "poster": poster_url,
             "error_message": error_message
         }
 
