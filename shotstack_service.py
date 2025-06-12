@@ -124,7 +124,12 @@ def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, 
         "output": {
             "format": "mp4",
             "resolution": output_resolution,
-            "aspectRatio": aspect_ratio
+            "aspectRatio": aspect_ratio, # <--- ДОБАВЛЕНА ЗАПЯТАЯ ЗДЕСЬ
+            "poster": { # <--- НОВОЕ: Добавляем запрос на постер
+                "format": "jpg",
+                "quality": 75,
+                "capture": "00:00:01.000" # Захватить кадр на 1-й секунде
+            }
         }
     }
 
@@ -228,13 +233,13 @@ def get_shotstack_render_status(render_id):
         result = response.json()
         status = result.get('response', {}).get('status')
         url = result.get('response', {}).get('url')
-        poster_url = result.get('response', {}).get('poster')
+        poster_url = result.get('response', {}).get('poster') # <-- ВОТ ГДЕ МЫ ИЗВЛЕКАЕМ poster
         error_message = result.get('response', {}).get('message')
 
         return {
             "status": status,
             "url": url,
-            "poster": poster_url,
+            "poster": poster_url, # <-- ВОТ ГДЕ МЫ ВОЗВРАЩАЕМ poster
             "error_message": error_message
         }
 
