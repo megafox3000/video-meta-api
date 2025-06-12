@@ -59,7 +59,8 @@ class Task(Base):
     # --- НОВЫЕ ПОЛЯ ДЛЯ SHOTSTACK ---
     shotstackRenderId = Column(String) # ID, который Shotstack возвращает после запуска рендера
     shotstackUrl = Column(String)      # Итоговый URL сгенерированного видео от Shotstack
-    # --- КОНЕЦ НОВЫХ ПОЛЕЙ ---
+    posterUrl = Column(String(500), nullable=True) # Постер
+
 
     def __repr__(self):
         return f"<Task(task_id='{self.task_id}', status='{self.status}')>"
@@ -78,7 +79,8 @@ class Task(Base):
             "message": self.message,
             "timestamp": self.timestamp.isoformat() if self.timestamp else None,
             "shotstackRenderId": self.shotstackRenderId, # Добавляем в словарь
-            "shotstackUrl": self.shotstackUrl            # Добавляем в словарь
+            "shotstackUrl": self.shotstackUrl,            # Добавляем в словарь
+            "posterUrl": self.posterUrl
         }
 
 def create_tables():
@@ -267,10 +269,12 @@ def get_task_status(task_id):
             print(f"[STATUS] Task {task_info.task_id} has Shotstack render ID. Checking Shotstack API...")
             try:
                 # Используем функцию из shotstack_service для получения статуса рендера
+                # Убедитесь, что get_shotstack_render_status возвращает поле 'poster'
                 status_info = shotstack_service.get_shotstack_render_status(task_info.shotstackRenderId)
 
                 shotstack_status = status_info['status']
                 shotstack_url = status_info['url']
+                shotstack_poster_url = status_info.get('poster')  # <--- НОВОЕ: Получаем URL постера
                 shotstack_error_message = status_info['error_message']
 
                 print(f"[STATUS] Shotstack render status for {task_info.shotstackRenderId}: {shotstack_status}")
@@ -284,8 +288,11 @@ def get_task_status(task_id):
                         task_info.status = 'completed'
                         task_info.message = "Shotstack video rendered successfully."
                     task_info.shotstackUrl = shotstack_url
+                    task_info.posterUrl = shotstack_poster_url  # <--- НОВОЕ: Сохраняем URL постера
                     session.commit()
                     print(f"[STATUS] Shotstack render completed for {task_id}. URL: {shotstack_url}")
+                    if shotstack_poster_url: # Логируем, если URL постера был найден
+                        print(f"[STATUS] Shotstack Poster URL: {shotstack_poster_url}")
                 elif shotstack_status in ['failed', 'error', 'failed_due_to_timeout']: # Добавлены возможные статусы ошибок
                     if task_id.startswith('concatenated_video_'):
                         task_info.status = 'concatenated_failed'
@@ -303,6 +310,7 @@ def get_task_status(task_id):
                 # Обновляем поле status в to_dict, чтобы оно отражало текущее состояние
                 response_data = task_info.to_dict()
                 response_data['status'] = task_info.status # Убедимся, что возвращаемый статус актуален
+                response_data['posterUrl'] = task_info.posterUrl # <--- НОВОЕ: Включаем posterUrl в ответ
                 return jsonify(response_data), 200
 
             except requests.exceptions.RequestException as e:
@@ -317,6 +325,7 @@ def get_task_status(task_id):
 
 
         print(f"[STATUS] Task found in DB: {task_info.task_id}, current_status: {task_info.status}")
+        # Убедимся, что posterUrl всегда включен в to_dict(), если он есть
         return jsonify(task_info.to_dict()), 200
     except SQLAlchemyError as e:
         session.rollback()
