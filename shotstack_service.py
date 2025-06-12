@@ -53,11 +53,11 @@ def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, 
         output_resolution = "sd"
 
     if width > height:
-        aspect_ratio = "9:16" # Вертикальная ориентация для мобильных
+        aspect_ratio = "9:16" # Vertical orientation for mobile
     elif height > width:
-        aspect_ratio = "9:16" # Вертикальная ориентация для мобильных
+        aspect_ratio = "9:16" # Vertical orientation for mobile
     else:
-        aspect_ratio = "1:1" # Квадрат
+        aspect_ratio = "1:1" # Square
 
     video_clips = []
     current_start_time = 0.0
@@ -79,7 +79,7 @@ def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, 
             if i > 0:
                 random_in_transition = random.choice(AVAILABLE_TRANSITIONS)
                 clip_definition["transition"] = {"in": random_in_transition}
-                print(f"[ShotstackService] Добавлен переход 'in': '{random_in_transition}' для клипа {i+1}.")
+                print(f"[ShotstackService] Added 'in' transition: '{random_in_transition}' for clip {i+1}.")
             
             video_clips.append(clip_definition)
             current_start_time += clip_duration
@@ -103,14 +103,14 @@ def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, 
                 }
             ],
             "tracks": [
-                {   # ДОРОЖКА 1: ДЛЯ ВИДЕОКЛИПОВ - INDEX 0
-                    "clips": video_clips
+                {   # ДОРОЖКА 1: ДЛЯ ТЕКСТОВЫХ НАЛОЖЕНИЙ - INDEX 0
+                    "clips": [] # Текстовые клипы будут добавлены сюда
                 },
-                {   # ДОРОЖКА 2: ДЛЯ АУДИО (оставим пока пустой, если не добавляем аудио) - INDEX 1
+                {   # ДОРОЖКА 2: ДЛЯ ВИДЕОКЛИПОВ - INDEX 1
+                    "clips": video_clips # Видеоклипы теперь здесь
+                },
+                {   # ДОРОЖКА 3: ДЛЯ АУДИО (оставим пока пустой, если не добавляем аудио) - INDEX 2
                     "clips": [] 
-                },
-                {   # НОВАЯ ДОРОЖКА 3: ДЛЯ ТЕКСТОВЫХ НАЛОЖЕНИЙ - INDEX 2
-                    "clips": []
                 }
             ],
             "background": "#000000"
@@ -127,7 +127,7 @@ def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, 
 
     if connect_videos:
         # Текст для объединенного видео (вверху)
-        payload["timeline"]["tracks"][2]["clips"].append({ # <--- ИЗМЕНЕНИЕ: Теперь clips[2]
+        payload["timeline"]["tracks"][0]["clips"].append({ # <--- ИЗМЕНЕНИЕ: Теперь clips[0]
             "asset": {
                 "type": "text",
                 "text": "ОБЪЕДИНЕННОЕ ВИДЕО",
@@ -148,7 +148,7 @@ def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, 
         })
 
     # Добавляем имя пользователя (или общий текст) внизу
-    payload["timeline"]["tracks"][2]["clips"].append({ # <--- ИЗМЕНЕНИЕ: Теперь clips[2]
+    payload["timeline"]["tracks"][0]["clips"].append({ # <--- ИЗМЕНЕНИЕ: Теперь clips[0]
         "asset": {
             "type": "text",
             "text": username_display_text,
