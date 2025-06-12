@@ -127,7 +127,7 @@ def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, 
         payload["timeline"]["tracks"][0]["clips"].append({ # <--- Текст теперь на дорожке 0
             "asset": {
                 "type": "text",
-                "text": "ОБЪЕДИНЕННОЕ ВИДЕО",
+                "text": "COMBINED VIDEO", # <--- ИЗМЕНЕНИЕ ЗДЕСЬ: текст на английском
                 "font": {
                     "family": "Roboto Black", 
                     "color": "#FFFFFF",
@@ -204,7 +204,7 @@ def initiate_shotstack_render(cloudinary_video_url_or_urls, video_metadata, orig
     )
 
     print(f"[ShotstackService] Отправка запроса в Shotstack API для {original_filename} (Объединение видео: {connect_videos})...")
-    print(f"[ShotstackService] JSON-payload для Shotstack: {json.dumps(payload, indent=2)}")
+    print(f"[ShotstackService] JSON-payload для Shotstack: {json.dumps(payload, indent=2, ensure_ascii=False)}")
 
     try:
         response = requests.post(shotstack_render_url, json=payload, headers=headers, timeout=30)
@@ -216,7 +216,7 @@ def initiate_shotstack_render(cloudinary_video_url_or_urls, video_metadata, orig
         if render_id:
             return render_id, "Рендеринг успешно поставлен в очередь."
         else:
-            print(f"[ShotstackService] ОШИБКА: Shotstack API не вернул ID рендеринга. Ответ: {json.dumps(result, indent=2)}")
+            print(f"[ShotstackService] ОШИБКА: Shotstack API не вернул ID рендеринга. Ответ: {json.dumps(result, indent=2, ensure_ascii=False)}")
             raise RuntimeError("Shotstack API не вернул ID рендеринга после успешного запроса.")
 
     except requests.exceptions.HTTPError as e:
@@ -232,7 +232,7 @@ def initiate_shotstack_render(cloudinary_video_url_or_urls, video_metadata, orig
         print(f"[ShotstackService] ОШИБКА: {e}")
         raise requests.exceptions.RequestException(error_message) from e
     except Exception as e:
-        error_message = f"Произошла непредвиденная ошибка при вызове Shotstack API статуса: {e}"
+        error_message = f"Произошла непредвиденная ошибка при вызове Shotstack API: {e}"
         print(f"[ShotstackService] ОШИБКА: {error_message}")
         raise Exception(error_message) from e
 
