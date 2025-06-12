@@ -113,9 +113,7 @@ def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, 
             "resolution": output_resolution,
             "aspectRatio": aspect_ratio,
             "poster": { # Запрос на создание постера для объединенного видео остается
-                "format": "jpg",
-                "quality": 75,
-                "capture": "00:00:01.000" # Захватить кадр на 1-й секунде
+                "capture": 1 # Захватить кадр на 1-й секунде
             }
         }
     }
