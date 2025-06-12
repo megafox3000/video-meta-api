@@ -4,13 +4,30 @@ import json
 import random
 
 # Определяем список доступных переходов Shotstack
+# Обновлен список для соответствия строгому списку Shotstack API
 AVAILABLE_TRANSITIONS = [
-    "fade",
-    "slideLeft",
-    "slideRight",
-    "wipeLeft",
-    "wipeRight",
-    "dissolve"
+    "none",
+    "fade", "fadeSlow", "fadeFast",
+    "reveal", "revealSlow", "revealFast",
+    "wipeLeft", "wipeLeftSlow", "wipeLeftFast",
+    "wipeRight", "wipeRightSlow", "wipeRightFast",
+    "slideLeft", "slideLeftSlow", "slideLeftFast",
+    "slideRight", "slideRightSlow", "slideRightFast",
+    "slideUp", "slideUpSlow", "slideUpFast",
+    "slideDown", "slideDownSlow", "slideDownFast",
+    "carouselLeft", "carouselLeftSlow", "carouselLeftFast",
+    "carouselRight", "carouselRightSlow", "carouselRightFast",
+    "carouselUp", "carouselUpSlow", "carouselUpFast",
+    "carouselDown", "carouselDownSlow", "carouselDownFast",
+    "shuffleTopRight", "shuffleTopRightSlow", "shuffleTopRightFast",
+    "shuffleRightTop", "shuffleRightTopSlow", "shuffleRightTopFast",
+    "shuffleRightBottom", "shuffleRightBottomSlow", "shuffleRightBottomFast",
+    "shuffleBottomRight", "shuffleBottomRightSlow", "shuffleBottomRightFast",
+    "shuffleBottomLeft", "shuffleBottomLeftSlow", "shuffleBottomLeftFast",
+    "shuffleLeftBottom", "shuffleLeftBottomSlow", "shuffleLeftBottomFast",
+    "shuffleLeftTop", "shuffleLeftTopSlow", "shuffleLeftTopFast",
+    "shuffleTopLeft", "shuffleTopLeftSlow", "shuffleTopLeftFast",
+    "zoom"
 ]
 
 def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, original_filename, instagram_username, email, linkedin_profile, connect_videos=False):
