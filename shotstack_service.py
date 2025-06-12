@@ -36,7 +36,10 @@ def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, 
         processed_metadata_list = video_metadata_list
 
     total_duration = sum(m.get('duration', 0) for m in processed_metadata_list if m)
-    
+    # Гарантируем минимальную длительность, если видео слишком короткое или пустое
+    if total_duration < 0.1: 
+        total_duration = 0.1 
+
     first_video_metadata = processed_metadata_list[0] if processed_metadata_list else {}
     width = first_video_metadata.get('width', 1920)
     height = first_video_metadata.get('height', 1080)
@@ -97,20 +100,17 @@ def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, 
 
     payload = {
         "timeline": {
-            "fonts": [ # <--- ИЗМЕНЕНИЕ ЗДЕСЬ: Теперь загружаем Cousine.ttf
+            "fonts": [
                 {
                     "src": "https://shotstack-assets.s3.amazonaws.com/fonts/Cousine.ttf" 
                 }
             ],
             "tracks": [
-                {   # ДОРОЖКА 1: ДЛЯ АУДИО - INDEX 0 (Обязательно аудио по ошибке Shotstack)
-                    "clips": [] # Пока пустая, но зарезервирована для аудио
+                {   # ДОРОЖКА 1: ДЛЯ ТЕКСТА - INDEX 0 (как вы просили)
+                    "clips": [] 
                 },
-                {   # ДОРОЖКА 2: ДЛЯ ВИДЕОКЛИПОВ - INDEX 1
+                {   # ДОРОЖКА 2: ДЛЯ ВИДЕОКЛИПОВ - INDEX 1 (как вы просили)
                     "clips": video_clips 
-                },
-                {   # ДОРОЖКА 3: ДЛЯ ТЕКСТОВЫХ НАЛОЖЕНИЙ - INDEX 2
-                    "clips": [] # Текстовые клипы будут добавлены сюда
                 }
             ],
             "background": "#000000"
@@ -125,14 +125,15 @@ def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, 
         }
     }
 
+    # Добавляем текстовые наложения на дорожку 0
     if connect_videos:
         # Текст для объединенного видео (вверху)
-        payload["timeline"]["tracks"][2]["clips"].append({ # <--- Текст теперь на дорожке 2
+        payload["timeline"]["tracks"][0]["clips"].append({ 
             "asset": {
                 "type": "text",
                 "text": "COMBINED VIDEO", 
                 "font": {
-                    "family": "Cousine", # <--- ИЗМЕНЕНИЕ ЗДЕСЬ: Используем "Cousine"
+                    "family": "Cousine", 
                     "color": "#FFFFFF",
                     "size": 70
                 },
@@ -142,18 +143,18 @@ def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, 
                 "effect": "zoomIn"
             },
             "start": 0,
-            "length": "end", # <--- Используем "end"
+            "length": "end", 
             "position": "top",
             "offset": { "y": "0.1" }
         })
 
     # Добавляем имя пользователя (или общий текст) внизу
-    payload["timeline"]["tracks"][2]["clips"].append({ # <--- И этот текст тоже на дорожке 2
+    payload["timeline"]["tracks"][0]["clips"].append({ 
         "asset": {
             "type": "text",
             "text": username_display_text,
             "font": {
-                "family": "Cousine", # <--- ИЗМЕНЕНИЕ ЗДЕСЬ: Используем "Cousine"
+                "family": "Cousine", 
                 "color": "#FFFFFF",
                 "size": 40
             },
@@ -162,7 +163,7 @@ def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, 
             "height": 100
         },
         "start": 0,
-        "length": "end", # <--- Используем "end"
+        "length": "end", 
         "position": "bottom",
         "offset": { "y": "-0.1" }
     })
@@ -261,13 +262,13 @@ def get_shotstack_render_status(render_id):
         result = response.json()
         status = result.get('response', {}).get('status')
         url = result.get('response', {}).get('url')
-        poster_url = result.get('response', {}).get('poster')
+        poster_url = result.get('response', {}).get('poster') 
         error_message = result.get('response', {}).get('message')
 
         return {
             "status": status,
             "url": url,
-            "poster": poster_url,
+            "poster": poster_url, 
             "error_message": error_message
         }
 
