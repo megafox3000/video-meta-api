@@ -59,7 +59,7 @@ class Task(Base):
     # --- НОВЫЕ ПОЛЯ ДЛЯ SHOTSTACK ---
     shotstackRenderId = Column(String) # ID, который Shotstack возвращает после запуска рендера
     shotstackUrl = Column(String)      # Итоговый URL сгенерированного видео от Shotstack
-    posterUrl = Column(String(500), nullable=True) # Постер
+    # - posterUrl = Column(String(500), nullable=True) # Постер
 
 
     def __repr__(self):
@@ -80,7 +80,7 @@ class Task(Base):
             "timestamp": self.timestamp.isoformat() if self.timestamp else None,
             "shotstackRenderId": self.shotstackRenderId, # Добавляем в словарь
             "shotstackUrl": self.shotstackUrl,            # Добавляем в словарь
-            "posterUrl": self.posterUrl
+            # - "posterUrl": self.posterUrl
         }
 
 def create_tables():
@@ -268,13 +268,11 @@ def get_task_status(task_id):
            task_info.status not in ['completed', 'failed', 'concatenated_completed', 'concatenated_failed']:
             print(f"[STATUS] Task {task_info.task_id} has Shotstack render ID. Checking Shotstack API...")
             try:
-                # Используем функцию из shotstack_service для получения статуса рендера
-                # Убедитесь, что get_shotstack_render_status возвращает поле 'poster'
                 status_info = shotstack_service.get_shotstack_render_status(task_info.shotstackRenderId)
 
                 shotstack_status = status_info['status']
                 shotstack_url = status_info['url']
-                shotstack_poster_url = status_info.get('poster')  # <--- НОВОЕ: Получаем URL постера
+                shotstack_poster_url = status_info.get('poster')  # <-- Эту строку оставляем!
                 shotstack_error_message = status_info['error_message']
 
                 print(f"[STATUS] Shotstack render status for {task_info.shotstackRenderId}: {shotstack_status}")
@@ -288,12 +286,12 @@ def get_task_status(task_id):
                         task_info.status = 'completed'
                         task_info.message = "Shotstack video rendered successfully."
                     task_info.shotstackUrl = shotstack_url
-                    task_info.posterUrl = shotstack_poster_url  # <--- НОВОЕ: Сохраняем URL постера
+                    # task_info.posterUrl = shotstack_poster_url  # <-- ЗАКОММЕНТИРУЙТЕ ИЛИ УДАЛИТЕ ЭТУ СТРОКУ
                     session.commit()
                     print(f"[STATUS] Shotstack render completed for {task_id}. URL: {shotstack_url}")
                     if shotstack_poster_url: # Логируем, если URL постера был найден
                         print(f"[STATUS] Shotstack Poster URL: {shotstack_poster_url}")
-                elif shotstack_status in ['failed', 'error', 'failed_due_to_timeout']: # Добавлены возможные статусы ошибок
+                elif shotstack_status in ['failed', 'error', 'failed_due_to_timeout']:
                     if task_id.startswith('concatenated_video_'):
                         task_info.status = 'concatenated_failed'
                         task_info.message = f"Concatenated video rendering failed: {shotstack_error_message or 'Unknown Shotstack error'}"
@@ -303,29 +301,32 @@ def get_task_status(task_id):
                     session.commit()
                     print(f"[STATUS] Shotstack render failed for {task_id}. Error: {task_info.message}")
                 else:
-                    # Рендеринг еще в процессе, ничего не меняем в task_info.status, только сообщение
                     task_info.message = f"Shotstack render in progress: {shotstack_status}"
                     print(f"[STATUS] Shotstack render still in progress for {task_id}. Status: {shotstack_status}")
                 
-                # Обновляем поле status в to_dict, чтобы оно отражало текущее состояние
                 response_data = task_info.to_dict()
-                response_data['status'] = task_info.status # Убедимся, что возвращаемый статус актуален
-                response_data['posterUrl'] = task_info.posterUrl # <--- НОВОЕ: Включаем posterUrl в ответ
+                response_data['status'] = task_info.status
+                response_data['posterUrl'] = shotstack_poster_url # <-- Эту строку оставляем!
                 return jsonify(response_data), 200
 
             except requests.exceptions.RequestException as e:
                 print(f"[STATUS] Error querying Shotstack API for {task_info.shotstackRenderId}: {e}")
                 task_info.message = f"Error checking Shotstack status: {e}"
-                # НЕ делаем session.rollback() здесь, так как мы только пытались обновить сообщение, а не данные
-                return jsonify(task_info.to_dict()), 200 # Возвращаем текущее состояние из БД, чтобы фронтенд мог обновить сообщение
+                # В случае ошибки, возможно, posterUrl будет недоступен, но мы все равно хотим его отправить, если он есть
+                response_data = task_info.to_dict()
+                response_data['posterUrl'] = shotstack_poster_url if 'shotstack_poster_url' in locals() else None # Включаем posterUrl, если он был получен до ошибки
+                return jsonify(response_data), 200
             except Exception as e:
                 print(f"[STATUS] Unexpected error during Shotstack status check for {task_info.shotstackRenderId}: {e}")
                 task_info.message = f"Unexpected error during Shotstack status check: {e}"
-                return jsonify(task_info.to_dict()), 200 # Возвращаем текущее состояние из БД
+                response_data = task_info.to_dict()
+                response_data['posterUrl'] = shotstack_poster_url if 'shotstack_poster_url' in locals() else None # Включаем posterUrl, если он был получен до ошибки
+                return jsonify(response_data), 200
 
 
         print(f"[STATUS] Task found in DB: {task_info.task_id}, current_status: {task_info.status}")
-        # Убедимся, что posterUrl всегда включен в to_dict(), если он есть
+        # Для случаев, когда task_info.shotstackRenderId нет (например, обычные загрузки),
+        # posterUrl в to_dict() не будет, и это нормально.
         return jsonify(task_info.to_dict()), 200
     except SQLAlchemyError as e:
         session.rollback()
