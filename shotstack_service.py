@@ -26,8 +26,8 @@ def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, 
                                  Должен содержать 'duration', 'width', 'height' для каждого.
     :param original_filename: Имя файла (для логирования/названия)
     :param instagram_username: Имя пользователя Instagram для наложения
-    :param email: Email пользователя
-    :param linkedin_profile: Профиль LinkedIn пользователя
+    :param email: Email пользователя.
+    :param linkedin_profile: Профиль LinkedIn пользователя.
     :param connect_videos: Флаг, указывающий, нужно ли объединять видео.
     """
     if not isinstance(video_metadata_list, list):
@@ -97,17 +97,20 @@ def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, 
 
     payload = {
         "timeline": {
-            "fonts": [
+            "fonts": [ # <--- ИЗМЕНЕНИЕ ЗДЕСЬ: Теперь загружаем Cousine.ttf
                 {
-                    "src": "https://templates.shotstack.io/basic-edits-title-image-video/2c0f2023-e18e-4a6c-829d-48d6896c561b/Roboto-Black.ttf"
+                    "src": "https://shotstack-assets.s3.amazonaws.com/fonts/Cousine.ttf" 
                 }
             ],
             "tracks": [
-                {   # ДОРОЖКА 1: ДЛЯ ТЕКСТОВЫХ НАЛОЖЕНИЙ - INDEX 0 (Текст здесь)
-                    "clips": [] 
+                {   # ДОРОЖКА 1: ДЛЯ АУДИО - INDEX 0 (Обязательно аудио по ошибке Shotstack)
+                    "clips": [] # Пока пустая, но зарезервирована для аудио
                 },
-                {   # ДОРОЖКА 2: ДЛЯ ВИДЕОКЛИПОВ - INDEX 1 (Видео здесь)
+                {   # ДОРОЖКА 2: ДЛЯ ВИДЕОКЛИПОВ - INDEX 1
                     "clips": video_clips 
+                },
+                {   # ДОРОЖКА 3: ДЛЯ ТЕКСТОВЫХ НАЛОЖЕНИЙ - INDEX 2
+                    "clips": [] # Текстовые клипы будут добавлены сюда
                 }
             ],
             "background": "#000000"
@@ -124,12 +127,12 @@ def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, 
 
     if connect_videos:
         # Текст для объединенного видео (вверху)
-        payload["timeline"]["tracks"][0]["clips"].append({ # <--- Текст теперь на дорожке 0
+        payload["timeline"]["tracks"][2]["clips"].append({ # <--- Текст теперь на дорожке 2
             "asset": {
                 "type": "text",
-                "text": "COMBINED VIDEO", # <--- ИЗМЕНЕНИЕ ЗДЕСЬ: текст на английском
+                "text": "COMBINED VIDEO", 
                 "font": {
-                    "family": "Roboto Black", 
+                    "family": "Cousine", # <--- ИЗМЕНЕНИЕ ЗДЕСЬ: Используем "Cousine"
                     "color": "#FFFFFF",
                     "size": 70
                 },
@@ -145,12 +148,12 @@ def create_shotstack_payload(cloudinary_video_url_or_urls, video_metadata_list, 
         })
 
     # Добавляем имя пользователя (или общий текст) внизу
-    payload["timeline"]["tracks"][0]["clips"].append({ # <--- И этот текст тоже на дорожке 0
+    payload["timeline"]["tracks"][2]["clips"].append({ # <--- И этот текст тоже на дорожке 2
         "asset": {
             "type": "text",
             "text": username_display_text,
             "font": {
-                "family": "Arial", 
+                "family": "Cousine", # <--- ИЗМЕНЕНИЕ ЗДЕСЬ: Используем "Cousine"
                 "color": "#FFFFFF",
                 "size": 40
             },
