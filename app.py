@@ -13,18 +13,20 @@ import hashlib
 import time
 import requests
 import json # Добавлен импорт json
+import uuid # НОВОЕ: Импортируем uuid
 import shotstack_service # Импортируем наш новый сервис Shotstack
+import cloudinary_service # НОВОЕ: Импортируем наш новый сервис Cloudinary
 
 app = Flask(__name__)
 CORS(app)
 
-# Конфигурация Cloudinary
-cloudinary.config(
-    cloud_name = os.environ.get('CLOUDINARY_CLOUD_NAME'),
-    api_key = os.environ.get('CLOUDINARY_API_KEY'),
-    api_secret = os.environ.get('CLOUDINARY_API_SECRET'),
-    secure = True
-)
+# Конфигурация Cloudinary (перенесено в cloudinary_service)
+# cloudinary.config(
+#     cloud_name = os.environ.get('CLOUDINARY_CLOUD_NAME'),
+#     api_key = os.environ.get('CLOUDINARY_API_KEY'),
+#     api_secret = os.environ.get('CLOUDINARY_API_SECRET'),
+#     secure = True
+# )
 
 # Конфигурация базы данных
 DATABASE_URL = os.environ.get('DATABASE_URL')
@@ -32,9 +34,14 @@ if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL environment variable is not set!")
 
 connect_args = {}
-if DATABASE_URL.startswith("postgresql://") or DATABASE_URL.startswith("postgres://"):
-    if "sslmode=" not in DATABASE_URL:
-        connect_args["sslmode"] = "require"
+# Для PostgreSQL на Render.com
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+# Если вы используете SSL, убедитесь, что sslmode=require присутствует.
+# Render.com обычно требует этого.
+# Если вы работаете локально с SQLite, это условие не будет выполняться.
+if "sslmode=" not in DATABASE_URL and (DATABASE_URL.startswith("postgresql://")):
+    connect_args["sslmode"] = "require"
 
 engine = create_engine(DATABASE_URL, connect_args=connect_args)
 
@@ -59,8 +66,7 @@ class Task(Base):
     # --- НОВЫЕ ПОЛЯ ДЛЯ SHOTSTACK ---
     shotstackRenderId = Column(String) # ID, который Shotstack возвращает после запуска рендера
     shotstackUrl = Column(String)      # Итоговый URL сгенерированного видео от Shotstack
-    # - posterUrl = Column(String(500), nullable=True) # Постер
-
+    posterUrl = Column(String(500), nullable=True) # Постер - РАСКОММЕНТИРОВАНО
 
     def __repr__(self):
         return f"<Task(task_id='{self.task_id}', status='{self.status}')>"
@@ -80,7 +86,7 @@ class Task(Base):
             "timestamp": self.timestamp.isoformat() if self.timestamp else None,
             "shotstackRenderId": self.shotstackRenderId, # Добавляем в словарь
             "shotstackUrl": self.shotstackUrl,            # Добавляем в словарь
-            # - "posterUrl": self.posterUrl
+            "posterUrl": self.posterUrl # РАСКОММЕНТИРОВАНО
         }
 
 def create_tables():
@@ -157,40 +163,27 @@ def upload_video():
             print("[UPLOAD] No selected video file.")
             return jsonify({"error": "No selected video file"}), 400
 
-        instagram_username = request.form.get('instagram_username')
+        # НОВОЕ: Используем 'instagram', 'email', 'linkedin' из формы
+        instagram_username = request.form.get('instagram')
         email = request.form.get('email')
-        linkedin_profile = request.form.get('linkedin_profile')
+        linkedin_profile = request.form.get('linkedin')
 
         cleaned_username = "".join(c for c in (instagram_username or '').strip() if c.isalnum() or c in ('_', '-')).strip()
         if not cleaned_username:
-            print("[UPLOAD] Instagram username is empty or invalid after cleaning.")
-            return jsonify({"error": "Instagram username is required and must be valid."}), 400
+            print("[UPLOAD] Instagram username is empty or invalid after cleaning. Using 'anonymous'.")
+            cleaned_username = 'anonymous' # Fallback for task_id prefix
 
         original_filename_base = os.path.splitext(filename)[0]
-        # Используем хэш для уникальности task_id, чтобы избежать конфликтов при повторной загрузке
-        # одного и того же файла, но с разными метаданными или при ошибках.
-        # Это также позволяет хранить несколько версий одного и того же "оригинального файла"
-        # если пользователь загружает его несколько раз.
-        unique_hash = hashlib.md5(f"{cleaned_username}/{filename}/{datetime.now().timestamp()}".encode()).hexdigest()
+        # НОВОЕ: Используем UUID для создания уникального task_id
+        unique_hash = str(uuid.uuid4().hex)
         task_id = f"{cleaned_username}/{original_filename_base}_{unique_hash}" # Новый, уникальный task_id
 
         print(f"[{task_id}] Received upload request for file: '{filename}'")
         print(f"[{task_id}] User data: Instagram='{instagram_username}', Email='{email}', LinkedIn='{linkedin_profile}'")
 
-        # Всегда выполняем загрузку, чтобы получить свежие метаданные и URL,
-        # так как task_id теперь будет уникальным для каждой загрузки.
-        print(f"[{task_id}] Uploading video to Cloudinary...")
-        upload_result = cloudinary.uploader.upload(
-            file,
-            resource_type="video",
-            folder=f"hife_video_analysis/{cleaned_username}",
-            public_id=f"{original_filename_base}_{unique_hash}", # Используем уникальный public_id в Cloudinary
-            unique_filename=False, # public_id уже уникален
-            overwrite=True, # В случае перезаливки (например, если файл уже был загружен с таким же хешем)
-            quality="auto",
-            format="mp4",
-            tags=["hife_analysis", cleaned_username]
-        )
+        # НОВОЕ: Используем cloudinary_service для загрузки
+        print(f"[{task_id}] Uploading video to Cloudinary using service...")
+        upload_result = cloudinary_service.upload_video(file, cleaned_username, public_id_suffix=unique_hash)
         print(f"[{task_id}] Cloudinary response after new upload: {upload_result}")
 
         if upload_result and upload_result.get('secure_url'):
@@ -224,7 +217,10 @@ def upload_video():
                 timestamp=datetime.now(),
                 cloudinary_url=cloudinary_url,
                 video_metadata=upload_result,
-                message='Video successfully uploaded to Cloudinary and full metadata obtained.'
+                message='Video successfully uploaded to Cloudinary and full metadata obtained.',
+                shotstackRenderId=None, # Инициализируем как None
+                shotstackUrl=None,     # Инициализируем как None
+                posterUrl=None         # Инициализируем как None
             )
             session.add(new_task)
             session.commit()
@@ -286,7 +282,7 @@ def get_task_status(task_id):
                         task_info.status = 'completed'
                         task_info.message = "Shotstack video rendered successfully."
                     task_info.shotstackUrl = shotstack_url
-                    # task_info.posterUrl = shotstack_poster_url  # <-- ЗАКОММЕНТИРУЙТЕ ИЛИ УДАЛИТЕ ЭТУ СТРОКУ
+                    task_info.posterUrl = shotstack_poster_url  # <-- РАСКОММЕНТИРОВАНО
                     session.commit()
                     print(f"[STATUS] Shotstack render completed for {task_id}. URL: {shotstack_url}")
                     if shotstack_poster_url: # Логируем, если URL постера был найден
@@ -298,6 +294,7 @@ def get_task_status(task_id):
                     else:
                         task_info.status = 'failed'
                         task_info.message = f"Shotstack rendering failed: {shotstack_error_message or 'Unknown Shotstack error'}"
+                    task_info.posterUrl = shotstack_poster_url # Сохраняем даже если ошибка
                     session.commit()
                     print(f"[STATUS] Shotstack render failed for {task_id}. Error: {task_info.message}")
                 else:
@@ -326,7 +323,7 @@ def get_task_status(task_id):
 
         print(f"[STATUS] Task found in DB: {task_info.task_id}, current_status: {task_info.status}")
         # Для случаев, когда task_info.shotstackRenderId нет (например, обычные загрузки),
-        # posterUrl в to_dict() не будет, и это нормально.
+        # posterUrl в to_dict() будет None, и это нормально.
         return jsonify(task_info.to_dict()), 200
     except SQLAlchemyError as e:
         session.rollback()
@@ -385,6 +382,7 @@ def generate_shotstack_video():
             task.status = 'shotstack_pending'
             task.message = f"Shotstack render initiated with ID: {render_id}"
             task.shotstackRenderId = render_id
+            task.posterUrl = None # Убедимся, что posterUrl сбрасывается при новом рендеринге
             session.commit()
             return jsonify({
                 "message": "Shotstack render initiated successfully.",
@@ -416,9 +414,11 @@ def process_videos():
         data = request.json
         task_ids = data.get('task_ids', []) # Теперь ожидаем 'task_ids'
         connect_videos = data.get('connect_videos', False)
+        # НОВОЕ: Получаем данные пользователя из запроса (предполагая, что фронтенд их передает)
         instagram_username = data.get('instagram_username')
         email = data.get('email')
         linkedin_profile = data.get('linkedin_profile')
+
 
         print(f"[PROCESS_VIDEOS] Received request. Task IDs: {task_ids}, Connect Videos: {connect_videos}")
 
@@ -451,7 +451,8 @@ def process_videos():
 
             # Создаем уникальное имя файла для объединенного видео
             combined_filename_base = "_".join([t.original_filename.split('.')[0] for t in valid_tasks[:3]]) # Берем первые 3 имени
-            combined_filename = f"Combined_{combined_filename_base}_{hashlib.md5(str(time.time()).encode()).hexdigest()[:8]}.mp4"
+            # НОВОЕ: Используем UUID для уникальности объединенного имени
+            combined_filename = f"Combined_{combined_filename_base}_{uuid.uuid4().hex[:8]}.mp4"
             
             render_id, message = shotstack_service.initiate_shotstack_render(
                 cloudinary_video_url_or_urls=cloudinary_video_urls,
@@ -465,7 +466,7 @@ def process_videos():
 
             if render_id:
                 # Генерируем уникальный task_id для объединенного видео, чтобы оно появилось как новый "пузырек" на фронтенде
-                concatenated_task_id = f"concatenated_video_{render_id}" 
+                concatenated_task_id = f"concatenated_video_{render_id}"  # НОВОЕ: Используем render_id
                 new_concatenated_task = Task(
                     task_id=concatenated_task_id,
                     instagram_username=instagram_username, # Привязываем к текущему пользователю
@@ -481,7 +482,8 @@ def process_videos():
                     }, # Метаданные для объединенного видео
                     message=f"Concatenated video render initiated with ID: {render_id}",
                     shotstackRenderId=render_id,
-                    shotstackUrl=None
+                    shotstackUrl=None,
+                    posterUrl=None # НОВОЕ: Инициализируем posterUrl как None
                 )
                 session.add(new_concatenated_task)
                 session.commit()
@@ -517,6 +519,7 @@ def process_videos():
                     continue
 
                 try:
+                    # НОВОЕ: Передаем connect_videos=False для индивидуальной обработки
                     render_id_single, message_single = shotstack_service.initiate_shotstack_render(
                         cloudinary_video_url_or_urls=task.cloudinary_url,
                         video_metadata=task.video_metadata or {},
@@ -524,13 +527,14 @@ def process_videos():
                         instagram_username=instagram_username,
                         email=email,
                         linkedin_profile=linkedin_profile,
-                        connect_videos=False
+                        connect_videos=False # Явно указываем False
                     )
 
                     if render_id_single:
                         task.shotstackRenderId = render_id_single
                         task.status = 'shotstack_pending'
                         task.message = f"Shotstack render initiated with ID: {render_id_single}"
+                        task.posterUrl = None # НОВОЕ: Сбрасываем posterUrl при новом рендеринге
                         session.add(task) # Добавляем для обновления
                         print(f"[PROCESS_VIDEOS] Shotstack render initiated for single video {task.original_filename}. Render ID: {render_id_single}")
                         initiated_tasks_info.append({
@@ -566,9 +570,9 @@ def process_videos():
                 "concatenated_task_id": concatenated_task_id # Отправляем новый ID на фронтенд
             }), 200
         elif connect_videos and not concatenated_task_id:
-             # Если сюда дошли, значит, что-то пошло не так в логике объединения, но без исключения
-             print("[PROCESS_VIDEOS] Logic error: connect_videos is True but concatenated_task_id is None.")
-             return jsonify({"error": "Failed to initiate concatenation due to an internal logic error."}), 500
+              # Если сюда дошли, значит, что-то пошло не так в логике объединения, но без исключения
+              print("[PROCESS_VIDEOS] Logic error: connect_videos is True but concatenated_task_id is None.")
+              return jsonify({"error": "Failed to initiate concatenation due to an internal logic error."}), 500
 
 
     except SQLAlchemyError as e:
@@ -597,98 +601,135 @@ def get_heavy_tasks():
 # ВНИМАНИЕ: Эти эндпоинты предназначены только для отладки.
 # Удалите их из продакшн-кода после завершения тестирования!
 # ---
+# @app.route('/test-shotstack-simple', methods=['GET']) # Делаем GET-запрос для удобства вызова из браузера
+# def test_shotstack_simple_connection():
+#     print("[TEST_SHOTSTACK_SIMPLE] Received request to test simple Shotstack connection.")
+#     try:
+#         # Важно: используем API_KEY и URL напрямую из переменных окружения
+#         # чтобы убедиться, что они доступны в контексте app.py
+#         shotstack_api_key = os.environ.get('SHOTSTACK_API_KEY')
+#         shotstack_render_url = "https://api.shotstack.io/stage/render"
 
-@app.route('/test-shotstack-simple', methods=['GET']) # Делаем GET-запрос для удобства вызова из браузера
-def test_shotstack_simple_connection():
-    print("[TEST_SHOTSTACK_SIMPLE] Received request to test simple Shotstack connection.")
+#         if not shotstack_api_key:
+#             print("[TEST_SHOTSTACK_SIMPLE] ERROR: SHOTSTACK_API_KEY is not set!")
+#             return jsonify({"status": "error", "message": "SHOTSTACK_API_KEY environment variable is not set."}), 500
+
+#         headers = {
+#             "Content-Type": "application/json",
+#             "x-api-key": shotstack_api_key
+#         }
+
+#         # Максимально простой JSON-запрос для Shotstack
+#         test_payload = {
+#             "timeline": {
+#                 "tracks": [
+#                     {
+#                         "clips": [
+#                             {
+#                                 "asset": {
+#                                     "type": "title",
+#                                     "text": "Hello Shotstack!",
+#                                     "style": "minimal",
+#                                     "color": "#FF0000",
+#                                     "size": "large"
+#                                 },
+#                                 "start": 0,
+#                                 "length": 2 # Длительность 2 секунды
+#                             }
+#                         ]
+#                     }
+#                 ],
+#                 "background": "#0000FF" # Синий фон
+#             },
+#             "output": {
+#                 "format": "mp4",
+#                 "resolution": "sd",
+#                 "aspectRatio": "16:9"
+#             }
+#         }
+
+#         print(f"[TEST_SHOTSTACK_SIMPLE] Sending simple payload: {json.dumps(test_payload, indent=2)}")
+
+#         # Отправляем POST-запрос
+#         test_response = requests.post(shotstack_render_url, json=test_payload, headers=headers, timeout=15)
+#         test_response.raise_for_status() # Вызовет исключение для 4xx/5xx ошибок
+
+#         shotstack_result = test_response.json()
+#         render_id = shotstack_result.get('response', {}).get('id')
+
+#         if render_id:
+#             print(f"[TEST_SHOTSTACK_SIMPLE] Shotstack render initiated successfully. Render ID: {render_id}")
+#             return jsonify({
+#                 "status": "success",
+#                 "message": "Simple Shotstack render initiated!",
+#                 "renderId": render_id,
+#                 "shotstackResponse": shotstack_result
+#             }), 200
+#         else:
+#             print(f"[TEST_SHOTSTACK_SIMPLE] Failed to get Shotstack render ID. Full response: {json.dumps(shotstack_result, indent=2)}")
+#             return jsonify({
+#                 "status": "error",
+#                 "message": "Failed to get Shotstack render ID.",
+#                 "shotstackResponse": shotstack_result
+#             }), 500
+
+#     except requests.exceptions.HTTPError as e:
+#         error_message = f"HTTP Error during Shotstack connection test: {e}"
+#         response_text = e.response.text if e.response is not None else "No response text"
+#         print(f"[TEST_SHOTSTACK_SIMPLE] {error_message}. Details: {response_text}")
+#         return jsonify({
+#             "status": "error",
+#             "message": error_message,
+#             "details": response_text
+#         }), e.response.status_code if e.response is not None else 500
+#     except requests.exceptions.ConnectionError as e:
+#         print(f"[TEST_SHOTSTACK_SIMPLE] Connection Error to Shotstack: {e}")
+#         return jsonify({"status": "error", "message": f"Connection Error to Shotstack: {e}"}), 500
+#     except requests.exceptions.Timeout as e:
+#         print(f"[TEST_SHOTSTACK_SIMPLE] Timeout connecting to Shotstack: {e}")
+#         return jsonify({"status": "error", "message": f"Timeout connecting to Shotstack: {e}"}), 500
+#     except Exception as e:
+#         print(f"[TEST_SHOTSTACK_SIMPLE] An unexpected error occurred during Shotstack connection test: {e}")
+#         return jsonify({"status": "error", "message": f"An unexpected error occurred: {e}"}), 500
+
+# НОВЫЙ ЭНДПОИНТ: /user-videos
+@app.route('/user-videos', methods=['GET'])
+def get_user_videos():
+    session = Session()
     try:
-        # Важно: используем API_KEY и URL напрямую из переменных окружения
-        # чтобы убедиться, что они доступны в контексте app.py
-        shotstack_api_key = os.environ.get('SHOTSTACK_API_KEY')
-        shotstack_render_url = "https://api.shotstack.io/stage/render"
+        # Получаем идентификаторы пользователя из параметров запроса
+        instagram_username = request.args.get('instagram_username')
+        email = request.args.get('email')
+        linkedin_profile = request.args.get('linkedin_profile')
 
-        if not shotstack_api_key:
-            print("[TEST_SHOTSTACK_SIMPLE] ERROR: SHOTSTACK_API_KEY is not set!")
-            return jsonify({"status": "error", "message": "SHOTSTACK_API_KEY environment variable is not set."}), 500
+        print(f"\n[USER_VIDEOS] Received request for user videos:")
+        print(f"[USER_VIDEOS] Instagram: '{instagram_username}', Email: '{email}', LinkedIn: '{linkedin_profile}'")
 
-        headers = {
-            "Content-Type": "application/json",
-            "x-api-key": shotstack_api_key
-        }
-
-        # Максимально простой JSON-запрос для Shotstack
-        test_payload = {
-            "timeline": {
-                "tracks": [
-                    {
-                        "clips": [
-                            {
-                                "asset": {
-                                    "type": "title",
-                                    "text": "Hello Shotstack!",
-                                    "style": "minimal",
-                                    "color": "#FF0000",
-                                    "size": "large"
-                                },
-                                "start": 0,
-                                "length": 2 # Длительность 2 секунды
-                            }
-                        ]
-                    }
-                ],
-                "background": "#0000FF" # Синий фон
-            },
-            "output": {
-                "format": "mp4",
-                "resolution": "sd",
-                "aspectRatio": "16:9"
-            }
-        }
-
-        print(f"[TEST_SHOTSTACK_SIMPLE] Sending simple payload: {json.dumps(test_payload, indent=2)}")
-
-        # Отправляем POST-запрос
-        test_response = requests.post(shotstack_render_url, json=test_payload, headers=headers, timeout=15)
-        test_response.raise_for_status() # Вызовет исключение для 4xx/5xx ошибок
-
-        shotstack_result = test_response.json()
-        render_id = shotstack_result.get('response', {}).get('id')
-
-        if render_id:
-            print(f"[TEST_SHOTSTACK_SIMPLE] Shotstack render initiated successfully. Render ID: {render_id}")
-            return jsonify({
-                "status": "success",
-                "message": "Simple Shotstack render initiated!",
-                "renderId": render_id,
-                "shotstackResponse": shotstack_result
-            }), 200
+        query = session.query(Task)
+        
+        # Строим запрос на основе предоставленных идентификаторов
+        if instagram_username:
+            query = query.filter(Task.instagram_username == instagram_username)
+        elif email:
+            query = query.filter(Task.email == email)
+        elif linkedin_profile:
+            query = query.filter(Task.linkedin_profile == linkedin_profile)
         else:
-            print(f"[TEST_SHOTSTACK_SIMPLE] Failed to get Shotstack render ID. Full response: {json.dumps(shotstack_result, indent=2)}")
-            return jsonify({
-                "status": "error",
-                "message": "Failed to get Shotstack render ID.",
-                "shotstackResponse": shotstack_result
-            }), 500
+            return jsonify({"error": "No user identifier (instagram_username, email, or linkedin_profile) provided"}), 400
 
-    except requests.exceptions.HTTPError as e:
-        error_message = f"HTTP Error during Shotstack connection test: {e}"
-        response_text = e.response.text if e.response is not None else "No response text"
-        print(f"[TEST_SHOTSTACK_SIMPLE] {error_message}. Details: {response_text}")
-        return jsonify({
-            "status": "error",
-            "message": error_message,
-            "details": response_text
-        }), e.response.status_code if e.response is not None else 500
-    except requests.exceptions.ConnectionError as e:
-        print(f"[TEST_SHOTSTACK_SIMPLE] Connection Error to Shotstack: {e}")
-        return jsonify({"status": "error", "message": f"Connection Error to Shotstack: {e}"}), 500
-    except requests.exceptions.Timeout as e:
-        print(f"[TEST_SHOTSTACK_SIMPLE] Timeout connecting to Shotstack: {e}")
-        return jsonify({"status": "error", "message": f"Timeout connecting to Shotstack: {e}"}), 500
+        user_tasks = query.order_by(Task.timestamp.desc()).all()
+        
+        # Преобразуем объекты Task в словари
+        tasks_data = [task.to_dict() for task in user_tasks]
+        
+        print(f"[USER_VIDEOS] Found {len(tasks_data)} videos for user.")
+        return jsonify(tasks_data), 200
+
     except Exception as e:
-        print(f"[TEST_SHOTSTACK_SIMPLE] An unexpected error occurred during Shotstack connection test: {e}")
-        return jsonify({"status": "error", "message": f"An unexpected error occurred: {e}"}), 500
-
+        print(f"[USER_VIDEOS] An unexpected error occurred: {e}")
+        return jsonify({"error": "An unexpected error occurred", "details": str(e)}), 500
+    finally:
+        session.close()
 
 if __name__ == '__main__':
     from waitress import serve
