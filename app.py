@@ -15,7 +15,7 @@ import requests
 import json
 
 # Импорт сервисов (cloudinary_service удален, shotstack_service остался)
-from services import shotstack_service 
+from import shotstack_service 
 
 # Инициализация Flask приложения
 app = Flask(__name__) # Используем стандартное имя для Flask
