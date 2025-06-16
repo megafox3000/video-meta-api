@@ -45,7 +45,7 @@ if DATABASE_URL.startswith("postgresql://") or DATABASE_URL.startswith("postgres
         connect_args["sslmode"] = "require"
     # Ensure SSL is correctly handled for Heroku/Render connections
     # connect_args["ssl_require"] = True # Эта строка может вызвать проблемы, если не настроен SSL сертификат.
-                                      # Render/Heroku обычно обрабатывают это автоматически с sslmode=require.
+                                        # Render/Heroku обычно обрабатывают это автоматически с sslmode=require.
 
 
 engine = create_engine(DATABASE_URL, connect_args=connect_args)
@@ -189,8 +189,8 @@ def upload_video():
                 video_metadata=upload_result,
                 message='Video successfully uploaded to Cloudinary and full metadata obtained.',
                 shotstackRenderId=None, # Инициализируем как None
-                shotstackUrl=None,     # Инициализируем как None
-                posterUrl=None         # Инициализируем как None
+                shotstackUrl=None,      # Инициализируем как None
+                posterUrl=None          # Инициализируем как None
             )
             session.add(new_task)
             session.commit()
@@ -339,7 +339,7 @@ def generate_shotstack_video():
 
         # Используем функцию из shotstack_service
         # Для этого эндпоинта всегда подразумеваем, что видео не объединяются
-        render_id, message = shotstack_service.initiate_shotstack_render(
+        render_id, message, poster_url = shotstack_service.initiate_shotstack_render(
             cloudinary_video_url_or_urls=task.cloudinary_url, # Одиночный URL
             video_metadata=task.video_metadata or {}, # Одиночный словарь метаданных
             original_filename=task.original_filename,
@@ -355,6 +355,7 @@ def generate_shotstack_video():
             task.status = 'shotstack_pending'
             task.message = f"Shotstack render initiated with ID: {render_id}"
             task.shotstackRenderId = render_id
+            task.posterUrl = poster_url
             session.commit()
             return jsonify({
                 "message": "Shotstack render initiated successfully.",
