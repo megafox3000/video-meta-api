@@ -22,8 +22,9 @@ import shotstack_service
 app = Flask(__name__) 
 
 # 2. Конфигурируем CORS, используя переменную 'app'
-# ВАЖНО: Убедитесь, что 'https://megafox3000.github.io' - это ТОЧНЫЙ домен вашего фронтенда.
-CORS(app, resources={r"/*": {"origins": "https://megafox3000.github.io"}})
+# --- ВАЖНО: Убедитесь, что этот URL ТОЧНО соответствует URL вашего опубликованного фронтенда на GitHub Pages ---
+# Например: https://megafox3000.github.io/video-analyzer/
+CORS(app, resources={r"/*": {"origins": "https://megafox3000.github.io/video-analyzer"}})
 
 # Конфигурация Cloudinary (возвращена в app.py)
 cloudinary.config(
