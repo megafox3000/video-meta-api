@@ -10,23 +10,19 @@ from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, J
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.exc import SQLAlchemyError
 from datetime import datetime
-import hashlib # Re-added for task_id generation
-import time # Re-added for task_id generation
+import hashlib
+import time
 import requests
-import json
+import json 
 
-# Импорт сервисов (cloudinary_service удален, shotstack_service остался)
 import shotstack_service 
 
-# 1. Инициализация Flask приложения ПЕРЕД настройкой CORS
 app = Flask(__name__) 
 
-# 2. Конфигурируем CORS, используя переменную 'app'
-# --- ВАЖНО: Убедитесь, что этот URL ТОЧНО соответствует URL вашего опубликованного фронтенда на GitHub Pages ---
-# Например: https://megafox3000.github.io/video-analyzer/
+# Конфигурируем CORS. Убедитесь, что 'https://megafox3000.github.io/video-analyzer' - это ТОЧНЫЙ домен вашего фронтенда.
 CORS(app, resources={r"/*": {"origins": "https://megafox3000.github.io/video-analyzer"}})
 
-# Конфигурация Cloudinary (возвращена в app.py)
+# Конфигурация Cloudinary
 cloudinary.config(
     cloud_name = os.environ.get('CLOUDINARY_CLOUD_NAME'),
     api_key = os.environ.get('CLOUDINARY_API_KEY'),
@@ -41,23 +37,17 @@ if not DATABASE_URL:
     DATABASE_URL = "sqlite:///app_data.db"
 
 connect_args = {}
-# Для PostgreSQL на Render.com
 if DATABASE_URL.startswith("postgresql://") or DATABASE_URL.startswith("postgres://"):
-    # SQLAlchemy ожидает postgresql://, а не postgres://
     if DATABASE_URL.startswith("postgres://"):
         DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
     if "sslmode=" not in DATABASE_URL:
         connect_args["sslmode"] = "require"
-    # connect_args["ssl_require"] = True # Эта строка может вызвать проблемы, если не настроен SSL сертификат.
-                                      # Render/Heroku обычно обрабатывают это автоматически с sslmode=require.
-
 
 engine = create_engine(DATABASE_URL, connect_args=connect_args)
 
 Base = declarative_base()
 Session = sessionmaker(bind=engine)
 
-# Определение модели задачи
 class Task(Base):
     __tablename__ = 'tasks'
 
@@ -72,11 +62,9 @@ class Task(Base):
     video_metadata = Column(JSON)
     message = Column(Text)
     timestamp = Column(DateTime, default=datetime.now)
-    # --- НОВЫЕ ПОЛЯ ДЛЯ SHOTSTACK ---
-    shotstackRenderId = Column(String(255)) # ID, который Shotstack возвращает после запуска рендера
-    shotstackUrl = Column(String(500))      # Итоговый URL сгенерированного видео от Shotstack
-    posterUrl = Column(String(500), nullable=True) # URL для poster image от Shotstack
-    # --- КОНЕЦ НОВЫХ ПОЛЕЙ ---
+    shotstackRenderId = Column(String(255))
+    shotstackUrl = Column(String(500))      
+    posterUrl = Column(String(500), nullable=True)
 
     def __repr__(self):
         return f"<Task(task_id='{self.task_id}', status='{self.status}')>"
@@ -135,26 +123,23 @@ def upload_video():
         cleaned_username = "".join(c for c in (instagram_username or '').strip() if c.isalnum() or c in ('_', '-')).strip()
         if not cleaned_username:
             print("[UPLOAD] Instagram username is empty or invalid after cleaning. Using 'anonymous'.")
-            cleaned_username = 'anonymous' # Fallback for task_id prefix
+            cleaned_username = 'anonymous' 
 
         original_filename_base = os.path.splitext(filename)[0]
-        # Используем хэш для уникальности task_id, чтобы избежать конфликтов при повторной загрузке
         unique_hash = hashlib.md5(f"{cleaned_username}/{filename}/{datetime.now().timestamp()}".encode()).hexdigest()
-        task_id = f"{cleaned_username}/{original_filename_base}_{unique_hash}" # Новый, уникальный task_id
+        task_id = f"{cleaned_username}/{original_filename_base}_{unique_hash}" 
 
-        # ИСПРАВЛЕНИЕ: Использовать cleaned_username вместо неопределенного user_id_prefix
         print(f"[{cleaned_username}/{file.filename}] Received upload request for file: '{filename}'")
         print(f"[{cleaned_username}/{file.filename}] User data: Instagram='{instagram_username}', Email='{email}', LinkedIn='{linkedin_profile}'")
 
-        # Загрузка видео в Cloudinary (логика возвращена в app.py)
         print(f"[{task_id}] Uploading video to Cloudinary...")
         upload_result = cloudinary.uploader.upload(
             file,
             resource_type="video",
             folder=f"hife_video_analysis/{cleaned_username}",
-            public_id=f"{original_filename_base}_{unique_hash}", # Используем уникальный public_id в Cloudinary
-            unique_filename=False, # public_id уже уникален
-            overwrite=True, # В случае перезаливки (например, если файл уже был загружен с таким же хешем)
+            public_id=f"{original_filename_base}_{unique_hash}",
+            unique_filename=False,
+            overwrite=True,
             quality="auto",
             format="mp4",
             tags=["hife_analysis", cleaned_username]
@@ -165,7 +150,6 @@ def upload_video():
             cloudinary_url = upload_result['secure_url']
             print(f"[{task_id}] Cloudinary URL: {cloudinary_url}")
 
-            # --- ПРОВЕРКА DURATION И ДРУГИХ ПОЛЕЙ ПОСЛЕ ЗАГРУЗКИ ---
             new_upload_duration = upload_result.get('duration', 0)
             new_upload_width = upload_result.get('width', 0)
             new_upload_height = upload_result.get('height', 0)
@@ -173,36 +157,35 @@ def upload_video():
 
             if new_upload_duration <= 0 or new_upload_width <= 0 or new_upload_height <= 0 or new_upload_bytes <= 0:
                 print(f"[{task_id}] CRITICAL WARNING: Video uploaded, but essential metadata (duration/resolution/size) is still 0 or missing from Cloudinary response. Full metadata: {upload_result}")
-                session.rollback()  # Откатываем транзакцию
+                session.rollback()  
                 return jsonify({
                     'error': 'Video uploaded but could not retrieve complete and valid metadata from Cloudinary. Please try again or check video file.',
                     'taskId': task_id,
                     'cloudinary_url': cloudinary_url,
-                    'metadata': upload_result # Возвращаем все, что получили
+                    'metadata': upload_result
                 }), 500
-            # --- КОНЕЦ ПРОВЕРКИ DURATION И ДРУГИХ ПОЛЕЙ ПОСЛЕ ЗАГРУЗКИ ---
 
             new_task = Task(
-                task_id=task_id, # Уникальный task_id
+                task_id=task_id, 
                 instagram_username=instagram_username,
                 email=email,
                 linkedin_profile=linkedin_profile,
                 original_filename=filename,
-                status='completed', # Предполагаем, что после загрузки на Cloudinary видео готово к дальнейшей обработке
+                status='completed', 
                 timestamp=datetime.now(),
                 cloudinary_url=cloudinary_url,
                 video_metadata=upload_result,
                 message='Video successfully uploaded to Cloudinary and full metadata obtained.',
-                shotstackRenderId=None, # Инициализируем как None
-                shotstackUrl=None,      # Инициализируем как None
-                posterUrl=None          # Инициализируем как None
+                shotstackRenderId=None,
+                shotstackUrl=None,      
+                posterUrl=None          
             )
             session.add(new_task)
             session.commit()
             print(f"[{task_id}] New task successfully created and committed to DB.")
             return jsonify({
                 'message': 'Video uploaded and task created.',
-                'taskId': new_task.task_id, # Возвращаем новый уникальный task_id
+                'taskId': new_task.task_id, 
                 'cloudinary_url': cloudinary_url,
                 'metadata': new_task.video_metadata,
                 'originalFilename': new_task.original_filename,
@@ -234,12 +217,10 @@ def get_task_status(task_id):
             print(f"[STATUS] Task with task_id '{task_id}' NOT FOUND in DB.")
             return jsonify({"message": "Task not found."}), 404
 
-        # Проверяем, является ли задача связанной с Shotstack рендерингом и еще не завершена
         if task_info.shotstackRenderId and \
            task_info.status not in ['completed', 'failed', 'concatenated_completed', 'concatenated_failed']:
             print(f"[STATUS] Task {task_info.task_id} has Shotstack render ID. Checking Shotstack API...")
             try:
-                # Используем функцию из shotstack_service для получения статуса рендера
                 status_info = shotstack_service.get_shotstack_render_status(task_info.shotstackRenderId)
 
                 shotstack_status = status_info['status']
@@ -250,7 +231,6 @@ def get_task_status(task_id):
                 print(f"[STATUS] Shotstack render status for {task_info.shotstackRenderId}: {shotstack_status}")
 
                 if shotstack_status == 'done' and shotstack_url:
-                    # Обновляем статус в нашей БД в зависимости от типа задачи
                     if task_id.startswith('concatenated_video_'):
                         task_info.status = 'concatenated_completed'
                         task_info.message = "Concatenated video rendered successfully."
@@ -273,7 +253,6 @@ def get_task_status(task_id):
                     session.commit()
                     print(f"[STATUS] Shotstack render failed for {task_id}. Error: {task_info.message}")
                 else:
-                    # Рендеринг еще в процессе, ничего не меняем в task_info.status, только сообщение
                     task_info.message = f"Shotstack render in progress: {shotstack_status}"
                     print(f"[STATUS] Shotstack render still in progress for {task_id}. Status: {shotstack_status}")
                 
@@ -366,7 +345,7 @@ def generate_shotstack_video():
         return jsonify({"error": str(e)}), 400
     except requests.exceptions.RequestException as err:
         session.rollback()
-        print(f"[SHOTSTACK] Network/API Error during Shotstack initiation for task {task_id}: {err}")
+        print(f"[SHOTSTACK] Network/API Error during Shotstack initiation: {err}")
         return jsonify({"error": f"Error communicating with Shotstack API: {err}", "details": str(err)}), 500
     except Exception as e:
         session.rollback()
