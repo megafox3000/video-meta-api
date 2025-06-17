@@ -18,12 +18,10 @@ import json
 # Импорт сервисов (cloudinary_service удален, shotstack_service остался)
 import shotstack_service 
 
+app = Flask(__name__) # Используем стандартное имя для Flask
 # Конфигурируем CORS, чтобы явно разрешить ваш домен GitHub Pages
 # ВАЖНО: Убедитесь, что 'https://megafox3000.github.io' - это ТОЧНЫЙ домен вашего фронтенда.
 CORS(app, resources={r"/*": {"origins": "https://megafox3000.github.io"}})
-# Инициализация Flask приложения
-app = Flask(__name__) # Используем стандартное имя для Flask
-CORS(app) 
 
 # Конфигурация Cloudinary (возвращена в app.py)
 cloudinary.config(
