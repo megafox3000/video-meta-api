@@ -5,6 +5,7 @@ import cloudinary.uploader # Добавлен прямой импорт Cloudina
 import cloudinary.api # Добавлен прямой импорт Cloudinary api
 from flask import Flask, request, jsonify, redirect, url_for
 from flask_cors import CORS
+
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, JSON
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.exc import SQLAlchemyError
@@ -17,6 +18,9 @@ import json
 # Импорт сервисов (cloudinary_service удален, shotstack_service остался)
 import shotstack_service 
 
+# Конфигурируем CORS, чтобы явно разрешить ваш домен GitHub Pages
+# ВАЖНО: Убедитесь, что 'https://megafox3000.github.io' - это ТОЧНЫЙ домен вашего фронтенда.
+CORS(app, resources={r"/*": {"origins": "https://megafox3000.github.io"}})
 # Инициализация Flask приложения
 app = Flask(__name__) # Используем стандартное имя для Flask
 CORS(app) 
