@@ -1,6 +1,6 @@
 # db_service.py
 import os
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, JSON
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, JSON, or_
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.exc import SQLAlchemyError
 from datetime import datetime
@@ -67,8 +67,12 @@ class Task(Base):
 
 def create_tables():
     """Создает таблицы в базе данных, если они еще не существуют."""
-    Base.metadata.create_all(engine)
-    logger.info("Database tables created or already exist.")
+    try:
+        Base.metadata.create_all(engine)
+        logger.info("Database tables created or already exist.")
+    except SQLAlchemyError as e:
+        logger.error(f"Error creating database tables: {e}", exc_info=True)
+        raise
 
 # Helper functions for database operations
 
@@ -147,7 +151,7 @@ def update_task(task, updates):
 
 def get_user_videos(instagram_username=None, email=None, linkedin_profile=None):
     """
-    Получает список видео для пользователя по одному из идентификаторов.
+    Получает список видео для пользователя по одному из идентификаторов (логика ИЛИ).
     Returns:
         list[Task]: Список объектов Task.
     Raises:
@@ -156,17 +160,28 @@ def get_user_videos(instagram_username=None, email=None, linkedin_profile=None):
     session = get_session()
     try:
         query = session.query(Task)
+        
+        # Строим динамический запрос с OR условиями
+        conditions = []
         if instagram_username:
-            query = query.filter(Task.instagram_username == instagram_username)
+            conditions.append(Task.instagram_username == instagram_username)
         if email:
-            query = query.filter(Task.email == email)
+            conditions.append(Task.email == email)
         if linkedin_profile:
-            query = query.filter(Task.linkedin_profile == linkedin_profile)
+            conditions.append(Task.linkedin_profile == linkedin_profile)
+
+        if conditions:
+            # Объединяем условия с помощью OR, чтобы найти совпадения по любому из полей
+            query = query.filter(or_(*conditions))
+        else:
+            # Если идентификаторы не предоставлены, возвращаем пустой список
+            return [] 
 
         # Фильтруем только те видео, которые могут быть интересны для отображения на фронтенде
+        # Включены также статусы 'failed' и 'cloudinary_metadata_incomplete'
         query = query.filter(Task.status.in_([
             'completed', 'processing', 'uploaded', 'shotstack_pending',
-            'concatenated_pending', 'concatenated_completed'
+            'concatenated_pending', 'concatenated_completed', 'failed', 'cloudinary_metadata_incomplete'
         ]))
         
         tasks = query.order_by(Task.timestamp.desc()).all()
