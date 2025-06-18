@@ -1,8 +1,7 @@
-# app.py
 import os
 import cloudinary
 from flask import Flask, request, jsonify
-from flask_cors import CORS # Импорт CORS
+from flask_cors import CORS
 from datetime import datetime
 import hashlib
 import time
@@ -14,7 +13,7 @@ import logging
 # Импортируем наши новые сервисы
 import shotstack_service
 import cloudinary_service
-import db_service # ДОБАВЛЕНО: Импортируем наш новый сервис базы данных
+import db_service
 
 # --- Configure Logging ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -23,7 +22,6 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 # --- CORS Configuration ---
-# ИСПРАВЛЕНИЕ: Заменено "headers" на "allow_headers" внутри ресурсов
 CORS(app, resources={r"/*": {"origins": [
     "https://megafox3000.github.io",
     "http://localhost:5500",
@@ -31,7 +29,7 @@ CORS(app, resources={r"/*": {"origins": [
 ], "methods": ["GET", "POST", "OPTIONS", "HEAD"], "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"]}}, supports_credentials=True)
 
 
-# Конфигурация Cloudinary (остается здесь, так как это глобальная настройка библиотеки)
+# Конфигурация Cloudinary
 cloudinary.config(
     cloud_name = os.environ.get('CLOUDINARY_CLOUD_NAME'),
     api_key = os.environ.get('CLOUDINARY_API_KEY'),
@@ -169,9 +167,9 @@ def upload_video():
         }
 
         if existing_task:
-            updated_task = db_service.update_task(existing_task, task_data) # Используем db_service
+            updated_task = db_service.update_task(existing_task, task_data)
         else:
-            new_task = db_service.add_task(task_data) # Используем db_service
+            new_task = db_service.add_task(task_data)
 
         logger.info(f"[{task_id}] Task successfully created/updated and committed to DB.")
         return jsonify({
@@ -202,7 +200,7 @@ def upload_video():
 def get_task_status(task_id):
     try:
         logger.info(f"[STATUS] Received status request for task_id: '{task_id}'")
-        task_info = db_service.get_task_by_id(task_id) # Используем db_service
+        task_info = db_service.get_task_by_id(task_id)
 
         if not task_info:
             logger.warning(f"[STATUS] Task with task_id '{task_id}' NOT FOUND in DB.")
@@ -250,7 +248,7 @@ def get_task_status(task_id):
                     logger.info(f"[STATUS] Shotstack render still in progress for {task_id}. Status: {shotstack_status}")
                 
                 if updates: # Обновляем, только если есть изменения
-                    task_info = db_service.update_task(task_info, updates) # Используем db_service
+                    task_info = db_service.update_task(task_info, updates)
 
                 response_data = task_info.to_dict()
                 response_data['status'] = task_info.status # Ensure status is always up-to-date
@@ -261,7 +259,7 @@ def get_task_status(task_id):
             except requests.exceptions.RequestException as e:
                 logger.error(f"[STATUS] Error querying Shotstack API for {task_info.shotstackRenderId}: {e}")
                 updates = {"message": f"Error checking Shotstack status: {e}"}
-                db_service.update_task(task_info, updates) # Используем db_service для обновления сообщения
+                db_service.update_task(task_info, updates)
                 response_data = task_info.to_dict()
                 if shotstack_poster_url:
                     response_data['posterUrl'] = shotstack_poster_url
@@ -269,7 +267,7 @@ def get_task_status(task_id):
             except Exception as e:
                 logger.exception(f"[STATUS] Unexpected error during Shotstack status check for {task_info.shotstackRenderId}:")
                 updates = {"message": f"Unexpected error during Shotstack status check: {e}"}
-                db_service.update_task(task_info, updates) # Используем db_service для обновления сообщения
+                db_service.update_task(task_info, updates)
                 response_data = task_info.to_dict()
                 if shotstack_poster_url:
                     response_data['posterUrl'] = shotstack_poster_url
@@ -281,6 +279,18 @@ def get_task_status(task_id):
         logger.exception(f"[STATUS] An unexpected error occurred in get_task_status:")
         return jsonify({"error": "An unexpected server error occurred", "details": str(e)}), 500
 
+# NEW: Endpoint for concatenated video status, reusing existing logic
+@app.route('/concatenated-video-status/<path:task_id>', methods=['GET'])
+def get_concatenated_video_status(task_id):
+    """
+    Returns the current status of a concatenated video.
+    This endpoint reuses the logic from `get_task_status` as it already handles
+    checking Shotstack status and database updates for both individual and
+    concatenated video tasks (which are identified by their 'concatenated_video_' prefix).
+    """
+    logger.info(f"[CONCATENATED_STATUS] Received request for concatenated video status: '{task_id}'. Delegating to general task status check.")
+    return get_task_status(task_id) # Просто вызываем существующую функцию
+
 @app.route('/generate-shotstack-video', methods=['POST'])
 def generate_shotstack_video():
     try:
@@ -291,7 +301,7 @@ def generate_shotstack_video():
             logger.warning("[SHOTSTACK] No taskId provided for Shotstack generation.")
             return jsonify({"error": "No taskId provided"}), 400
 
-        task = db_service.get_task_by_id(task_id) # Используем db_service
+        task = db_service.get_task_by_id(task_id)
         if not task:
             logger.warning(f"[SHOTSTACK] Task {task_id} not found in DB.")
             return jsonify({"error": "Task not found."}), 404
@@ -319,7 +329,7 @@ def generate_shotstack_video():
 
         if render_id:
             logger.info(f"[SHOTSTACK] Shotstack render initiated for {task_id}. Render ID: {render_id}")
-            db_service.update_task(task, { # Используем db_service
+            db_service.update_task(task, {
                 "status": 'shotstack_pending',
                 "message": f"Shotstack render initiated with ID: {render_id}",
                 "shotstackRenderId": render_id
@@ -365,7 +375,7 @@ def process_videos():
 
         valid_tasks = []
         for tid in task_ids:
-            task = db_service.get_task_by_id(tid) # Используем db_service
+            task = db_service.get_task_by_id(tid)
             if task and task.cloudinary_url and task.video_metadata and task.status == 'completed':
                 valid_tasks.append(task)
             else:
@@ -399,7 +409,7 @@ def process_videos():
             )
 
             if render_id:
-                concatenated_task_id = f"concatenated_video_{render_id}" 
+                concatenated_task_id = f"concatenated_video_{render_id}"
                 new_concatenated_task_data = {
                     "task_id": concatenated_task_id,
                     "instagram_username": instagram_username,
@@ -418,7 +428,7 @@ def process_videos():
                     "shotstackUrl": None,
                     "posterUrl": None
                 }
-                db_service.add_task(new_concatenated_task_data) # Используем db_service
+                db_service.add_task(new_concatenated_task_data)
                 logger.info(f"[PROCESS_VIDEOS] Shotstack render initiated for connected videos. New Task ID: {concatenated_task_id}, Render ID: {render_id}")
             else:
                 logger.error(f"[PROCESS_VIDEOS] Shotstack API did not return a render ID for connected videos. Unexpected.")
@@ -451,7 +461,7 @@ def process_videos():
                     )
 
                     if render_id_single:
-                        db_service.update_task(task, { # Используем db_service
+                        db_service.update_task(task, {
                             "shotstackRenderId": render_id_single,
                             "status": 'shotstack_pending',
                             "message": f"Shotstack render initiated with ID: {render_id_single}"
@@ -487,8 +497,8 @@ def process_videos():
                 "concatenated_task_id": concatenated_task_id
             }), 200
         elif connect_videos and not concatenated_task_id:
-              logger.error("[PROCESS_VIDEOS] Logic error: connect_videos is True but concatenated_task_id is None.")
-              return jsonify({"error": "Failed to initiate concatenation due to an internal logic error."}), 500
+            logger.error("[PROCESS_VIDEOS] Logic error: connect_videos is True but concatenated_task_id is None.")
+            return jsonify({"error": "Failed to initiate concatenation due to an internal logic error."}), 500
 
 
     except Exception as e:
@@ -514,7 +524,7 @@ def get_user_videos():
             logger.warning("[USER_VIDEOS] No identifier provided for fetching user videos.")
             return jsonify({"error": "Please provide an Instagram username, email, or LinkedIn profile to fetch videos."}), 400
 
-        tasks = db_service.get_user_videos( # Используем db_service
+        tasks = db_service.get_user_videos(
             instagram_username=instagram_username,
             email=email,
             linkedin_profile=linkedin_profile
