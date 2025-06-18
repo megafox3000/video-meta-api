@@ -1,8 +1,8 @@
-# app.py 
+# app.py
 import os
 import cloudinary
 from flask import Flask, request, jsonify
-from flask_cors import CORS
+from flask_cors import CORS # Импорт CORS
 from datetime import datetime
 import hashlib
 import time
@@ -23,11 +23,12 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 # --- CORS Configuration ---
+# ИСПРАВЛЕНИЕ: Заменено "headers" на "allow_headers" внутри ресурсов
 CORS(app, resources={r"/*": {"origins": [
     "https://megafox3000.github.io",
     "http://localhost:5500",
     "http://127.0.0.1:5500"
-], "methods": ["GET", "POST", "OPTIONS", "HEAD"], "headers": ["Content-Type", "Authorization", "X-Requested-With"]}}, supports_credentials=True)
+], "methods": ["GET", "POST", "OPTIONS", "HEAD"], "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"]}}, supports_credentials=True)
 
 
 # Конфигурация Cloudinary (остается здесь, так как это глобальная настройка библиотеки)
