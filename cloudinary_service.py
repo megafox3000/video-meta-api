@@ -1,4 +1,4 @@
-# cloudinary_service.py
+# cloudinary_service.py 
 import cloudinary
 import cloudinary.uploader
 import cloudinary.api # Необходимо для функции delete_resources
