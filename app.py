@@ -27,7 +27,7 @@ CORS(app, resources={r"/*": {"origins": [
     "https://megafox3000.github.io",
     "http://localhost:5500",
     "http://127.0.0.1:5500"
-], "methods": ["GET", "POST", "OPTIONS", "HEAD"], "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"]}}, supports_credentials=True)
+], "methods": ["GET", "POST", "OPTIONS", "HEAD", "DELETE"], "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"]}}, supports_credentials=True)
 
 
 # Конфигурация Cloudinary
