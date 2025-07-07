@@ -1,6 +1,7 @@
 # cloudinary_service.py
 import cloudinary
 import cloudinary.uploader
+import cloudinary.api # Необходимо для функции delete_resources
 import hashlib
 from datetime import datetime
 import logging
@@ -73,3 +74,39 @@ def upload_video_to_cloudinary(file_stream, original_filename, instagram_usernam
     except Exception as e:
         logger.error(f"[CloudinaryService] ОШИБКА при загрузке в Cloudinary: {e}", exc_info=True)
         raise # Перебрасываем исключение для обработки в app.py
+
+def delete_video(public_id):
+    """
+    Удаляет видео из Cloudinary по его public_id.
+
+    Args:
+        public_id (str): Public ID видео в Cloudinary.
+
+    Returns:
+        dict: Результат операции удаления от Cloudinary.
+
+    Raises:
+        Exception: Если удаление из Cloudinary не удалось.
+    """
+    logger.info(f"[CloudinaryService] Удаление видео с public_id: {public_id} из Cloudinary...")
+    try:
+        # Используем cloudinary.api.delete_resources для удаления видео
+        # resource_type="video" указывает, что мы удаляем видеоресурс
+        delete_result = cloudinary.api.delete_resources(
+            public_id,
+            resource_type="video",
+            type="upload" # Указываем тип ресурса как "upload"
+        )
+        logger.info(f"[CloudinaryService] Результат удаления из Cloudinary: {delete_result}")
+        if delete_result and delete_result.get('deleted'):
+            if public_id in delete_result['deleted']:
+                logger.info(f"[CloudinaryService] Видео '{public_id}' успешно удалено из Cloudinary.")
+                return delete_result
+            else:
+                raise Exception(f"Cloudinary вернул успешный ответ, но public_id '{public_id}' не найден в списке удаленных.")
+        else:
+            raise Exception(f"Не удалось удалить видео '{public_id}' из Cloudinary. Ответ: {delete_result}")
+    except Exception as e:
+        logger.error(f"[CloudinaryService] ОШИБКА при удалении видео '{public_id}' из Cloudinary: {e}", exc_info=True)
+        raise # Перебрасываем исключение для обработки в app.py
+
