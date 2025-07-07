@@ -86,6 +86,24 @@ def reverse_geocode(lat, lon):
         logger.error(f"Geocoding error: Could not decode JSON from response.")
         return "Geocoding error: Invalid response from geocoding service."
 
+# Вспомогательная функция для извлечения public_id из URL Cloudinary
+def extract_public_id_from_cloudinary_url(url):
+    """Извлекает Cloudinary public_id из полного URL."""
+    # Пример URL: https://res.cloudinary.com/dcqzpaik8/video/upload/v1678888888/folder/subfolder/public_id.mp4
+    # Нам нужно найти 'folder/subfolder/public_id'
+    try:
+        parts = url.split('/upload/')
+        if len(parts) > 1:
+            public_id_with_version = parts[1]
+            # Удаляем версию (vXXXX/)
+            public_id_no_version = public_id_with_version.split('/', 1)[1]
+            # Удаляем расширение файла
+            public_id_final = public_id_no_version.rsplit('.', 1)[0]
+            return public_id_final
+    except Exception as e:
+        logging.error(f"Error extracting public ID from URL {url}: {e}")
+        return None
+
 # ----------- API ENDPOINTS -----------
 
 @app.route('/')
@@ -541,6 +559,65 @@ def get_user_videos():
     except Exception as e:
         logger.exception(f"[USER_VIDEOS] An unexpected error occurred fetching user videos:")
         return jsonify({"error": "An unexpected server error occurred", "details": str(e)}), 500
+
+@app.route('/delete_video/<string:video_id>', methods=['DELETE'])
+@cross_origin()
+def delete_video(video_id):
+    # Получаем идентификаторы пользователя из параметров запроса
+    instagram_username = request.args.get('instagram_username')
+    email = request.args.get('email')
+    linkedin_profile = request.args.get('linkedin_profile')
+
+    if not video_id:
+        return jsonify({"message": "Video ID is required"}), 400
+
+    logging.info(f"[DELETE] Received delete request for video_id: {video_id}")
+    logging.info(f"[DELETE] User data: Instagram='{instagram_username}', Email='{email}', LinkedIn='{linkedin_profile}'")
+
+    try:
+        # 1. Удаление из Cloudinary
+        # Проверяем, является ли video_id идентификатором Cloudinary или Shotstack render ID.
+        # Cloudinary public_id не содержит 'concatenated_video_'
+        # Shotstack render ID имеет вид 'concatenated_video_<render_id>'
+        if video_id.startswith('concatenated_video_'):
+            # Это объединенное видео. Shotstack не предоставляет прямого API для удаления.
+            # Мы пытаемся удалить его из Cloudinary, если оно было туда загружено.
+            logging.info(f"[DELETE] Concatenated video {video_id} requested for deletion. No direct Shotstack deletion API.")
+            task = Task.query.filter_by(task_id=video_id).first()
+            if task and task.video_url and "cloudinary" in task.video_url:
+                try:
+                    # Извлекаем Cloudinary public_id из URL видео
+                    cloudinary_public_id_to_delete = extract_public_id_from_cloudinary_url(task.video_url)
+                    if cloudinary_public_id_to_delete:
+                        CloudinaryService.delete_video(cloudinary_public_id_to_delete)
+                        logging.info(f"[DELETE] Successfully deleted concatenated video from Cloudinary: {cloudinary_public_id_to_delete}")
+                except Exception as e:
+                    logging.error(f"[DELETE] Error deleting concatenated video from Cloudinary: {e}")
+            else:
+                logging.info(f"[DELETE] No Cloudinary URL found for concatenated video {video_id} or not a Cloudinary video.")
+
+        else:
+            # Это обычное видео, удаляем его из Cloudinary по public_id
+            CloudinaryService.delete_video(video_id)
+            logging.info(f"[DELETE] Successfully deleted video from Cloudinary: {video_id}")
+
+        # 2. Удаление из базы данных
+        task_to_delete = Task.query.filter_by(task_id=video_id).first()
+
+        if task_to_delete:
+            db.session.delete(task_to_delete)
+            db.session.commit()
+            logging.info(f"[DELETE] Task '{video_id}' successfully deleted from DB.")
+            return jsonify({"message": f"Video '{video_id}' deleted successfully"}), 200
+        else:
+            logging.warning(f"[DELETE] Task '{video_id}' not found in DB.")
+            return jsonify({"message": "Video not found in database"}), 404
+
+    except Exception as e:
+        db.session.rollback() # Откатываем изменения в случае ошибки
+        logging.error(f"[DELETE] Error deleting video '{video_id}': {e}", exc_info=True)
+        return jsonify({"message": f"An error occurred while deleting the video: {str(e)}"}), 500
+
 
 if __name__ == '__main__':
     from waitress import serve
