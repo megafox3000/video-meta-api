@@ -1,7 +1,7 @@
 import os
 import cloudinary
 from flask import Flask, request, jsonify
-from flask_cors import CORS
+from flask_cors import CORS # Эту строку оставляем
 from datetime import datetime
 import hashlib
 import time
@@ -9,7 +9,7 @@ import requests
 import json
 import re
 import logging
-import cross_origin
+# import cross_origin # <--- Эту строку нужно УДАЛИТЬ!
 
 # Импортируем наши новые сервисы
 import shotstack_service
@@ -584,13 +584,19 @@ def delete_video(video_id):
             # Это объединенное видео. Shotstack не предоставляет прямого API для удаления.
             # Мы пытаемся удалить его из Cloudinary, если оно было туда загружено.
             logging.info(f"[DELETE] Concatenated video {video_id} requested for deletion. No direct Shotstack deletion API.")
-            task = Task.query.filter_by(task_id=video_id).first()
-            if task and task.video_url and "cloudinary" in task.video_url:
+            # Здесь предполагается, что 'Task' и 'db' доступны.
+            # Если это не так, вам нужно будет передать их или импортировать.
+            # В данном контексте, я предполагаю, что Task и db берутся из db_service.
+            # Если Task - это модель SQLAlchemy, то нужно импортировать ее из db_service
+            # или убедиться, что db_service.get_task_by_id возвращает объект,
+            # который можно удалить через db.session.delete.
+            task = db_service.get_task_by_id(video_id) # Используем db_service
+            if task and task.cloudinary_url and "cloudinary" in task.cloudinary_url: # Изменено video_url на cloudinary_url
                 try:
                     # Извлекаем Cloudinary public_id из URL видео
-                    cloudinary_public_id_to_delete = extract_public_id_from_cloudinary_url(task.video_url)
+                    cloudinary_public_id_to_delete = extract_public_id_from_cloudinary_url(task.cloudinary_url)
                     if cloudinary_public_id_to_delete:
-                        CloudinaryService.delete_video(cloudinary_public_id_to_delete)
+                        cloudinary_service.delete_video(cloudinary_public_id_to_delete) # Используем cloudinary_service
                         logging.info(f"[DELETE] Successfully deleted concatenated video from Cloudinary: {cloudinary_public_id_to_delete}")
                 except Exception as e:
                     logging.error(f"[DELETE] Error deleting concatenated video from Cloudinary: {e}")
@@ -599,23 +605,26 @@ def delete_video(video_id):
 
         else:
             # Это обычное видео, удаляем его из Cloudinary по public_id
-            CloudinaryService.delete_video(video_id)
+            cloudinary_service.delete_video(video_id) # Используем cloudinary_service
             logging.info(f"[DELETE] Successfully deleted video from Cloudinary: {video_id}")
 
         # 2. Удаление из базы данных
-        task_to_delete = Task.query.filter_by(task_id=video_id).first()
-
-        if task_to_delete:
-            db.session.delete(task_to_delete)
-            db.session.commit()
+        # Здесь также предполагается, что db_service имеет метод для удаления
+        # или что Task - это модель, которую можно удалить через db.session.
+        # Если вы используете SQLAlchemy, убедитесь, что db.session доступен.
+        # Если db_service управляет сессиями, то вызов delete_task должен быть там.
+        # Я предполагаю, что db_service.delete_task существует.
+        if db_service.delete_task(video_id): # Используем db_service
             logging.info(f"[DELETE] Task '{video_id}' successfully deleted from DB.")
             return jsonify({"message": f"Video '{video_id}' deleted successfully"}), 200
         else:
-            logging.warning(f"[DELETE] Task '{video_id}' not found in DB.")
+            logging.warning(f"[DELETE] Task '{video_id}' not found in DB for deletion.")
             return jsonify({"message": "Video not found in database"}), 404
 
     except Exception as e:
-        db.session.rollback() # Откатываем изменения в случае ошибки
+        # Если db.session.rollback() не работает напрямую, это означает,
+        # что управление сессиями должно быть в db_service.
+        # В данном случае, просто логируем ошибку.
         logging.error(f"[DELETE] Error deleting video '{video_id}': {e}", exc_info=True)
         return jsonify({"message": f"An error occurred while deleting the video: {str(e)}"}), 500
 
