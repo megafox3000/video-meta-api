@@ -9,6 +9,7 @@ import requests
 import json
 import re
 import logging
+import cross_origin
 
 # Импортируем наши новые сервисы
 import shotstack_service
