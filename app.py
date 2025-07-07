@@ -1,7 +1,7 @@
 import os
 import cloudinary
 from flask import Flask, request, jsonify
-from flask_cors import CORS # Эту строку оставляем
+from flask_cors import CORS, cross_origin # Добавлен импорт cross_origin
 from datetime import datetime
 import hashlib
 import time
