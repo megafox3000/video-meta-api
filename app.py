@@ -512,7 +512,7 @@ def get_heavy_tasks():
 
 @app.route('/user-videos', methods=['GET'])
 def get_user_videos():
-    # Получаем идентификаторы из запроса
+    # 1. Получаем идентификаторы из запроса
     instagram_username = request.args.get('instagram_username')
     email = request.args.get('email')
     linkedin_profile = request.args.get('linkedin_profile')
@@ -521,7 +521,7 @@ def get_user_videos():
         return jsonify({"error": "Please provide an identifier"}), 400
 
     try:
-        # 1. Получаем ВСЕ задачи из нашей БД для этого пользователя
+        # 2. Получаем список словарей из сервиса БД
         tasks_from_db = db_service.get_user_videos(
             instagram_username=instagram_username,
             email=email,
@@ -531,26 +531,29 @@ def get_user_videos():
         verified_tasks = []
         tasks_to_delete_ids = []
 
-        # 2. Проверяем каждую задачу
-        for task in tasks_from_db:
-            # Проверяем существование видео в Cloudinary по его public_id
-            video_exists = cloudinary_service.check_video_existence(task.cloudinary_public_id)
-
+        # 3. Проверяем каждую задачу (которая теперь является словарем)
+        for task_dict in tasks_from_db:
+            # ИСПРАВЛЕНО: Доступ к данным по ключу словаря (в camelCase)
+            public_id = task_dict.get('cloudinaryPublicId')
+            
+            video_exists = cloudinary_service.check_video_existence(public_id)
+            
             if video_exists:
-                # Если видео существует, добавляем его в список для отправки на фронтенд
-                verified_tasks.append(task.to_dict())
+                # ИСПРАВЛЕНО: Добавляем в список сам словарь, так как он уже готов
+                verified_tasks.append(task_dict)
             else:
                 # Если видео НЕ существует, помечаем его на удаление из нашей БД
-                logger.warning(f"Видео для задачи {task.task_id} не найдено в Cloudinary. Помечаем на удаление из БД.")
-                tasks_to_delete_ids.append(task.id)
+                logger.warning(f"Видео для задачи {task_dict.get('taskId')} не найдено в Cloudinary. Помечаем на удаление из БД.")
+                tasks_to_delete_ids.append(task_dict.get('id'))
 
-        # 3. Удаляем "мертвые" записи из нашей БД
+        # 4. Удаляем "мертвые" записи из нашей БД
         if tasks_to_delete_ids:
             logger.info(f"Удаление {len(tasks_to_delete_ids)} несуществующих записей из БД...")
             for task_id in tasks_to_delete_ids:
-                db_service.delete_task_by_id(task_id) # Используем ID первичного ключа
+                if task_id: # Дополнительная проверка, что ID не None
+                    db_service.delete_task_by_id(task_id)
 
-        # 4. Возвращаем фронтенду только проверенный, "чистый" список видео
+        # 5. Возвращаем фронтенду только проверенный, "чистый" список видео
         return jsonify(verified_tasks), 200
 
     except Exception as e:
