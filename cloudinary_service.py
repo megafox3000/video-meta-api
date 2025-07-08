@@ -5,6 +5,7 @@ import hashlib
 from datetime import datetime
 import logging
 import os
+from cloudinary.exceptions import NotFound
 
 logger = logging.getLogger(__name__)
 
@@ -73,3 +74,28 @@ def upload_video_to_cloudinary(file_stream, original_filename, instagram_usernam
     except Exception as e:
         logger.error(f"[CloudinaryService] ОШИБКА при загрузке в Cloudinary: {e}", exc_info=True)
         raise # Перебрасываем исключение для обработки в app.py
+
+def check_video_existence(public_id):
+    """
+    Проверяет, существует ли ресурс в Cloudinary.
+    Возвращает True, если ресурс найден, и False, если нет.
+    """
+    if not public_id:
+        return False
+    try:
+        # Метод .resource() вернет данные, если ресурс есть,
+        # или выбросит исключение NotFound, если его нет.
+        cloudinary.api.resource(public_id, resource_type="video")
+        logger.info(f"[CloudinaryService] Проверка: ресурс '{public_id}' существует.")
+        return True
+    except NotFound:
+        # Это ожидаемое исключение, если файла нет.
+        logger.warning(f"[CloudinaryService] Проверка: ресурс '{public_id}' НЕ НАЙДЕН в Cloudinary.")
+        return False
+    except Exception as e:
+        # Любые другие ошибки (проблемы с API, соединением) логируем.
+        logger.error(f"[CloudinaryService] Ошибка при проверке ресурса '{public_id}': {e}")
+        # В этом случае лучше считать, что ресурс есть, чтобы случайно не удалить его.
+        return True
+
+
