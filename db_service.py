@@ -1,3 +1,4 @@
+# db_service.py
 import os
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, JSON, or_
 from sqlalchemy.orm import sessionmaker, declarative_base
@@ -42,7 +43,6 @@ class Task(Base):
     shotstackRenderId = Column(String)
     shotstackUrl = Column(String)
     posterUrl = Column(String)
-    cloudinary_public_id = Column(String) # Добавляем это поле для хранения public_id
 
     def __repr__(self):
         return f"<Task(task_id='{self.task_id}', status='{self.status}')>"
@@ -62,8 +62,7 @@ class Task(Base):
             "timestamp": self.timestamp.isoformat() if self.timestamp else None,
             "shotstackRenderId": self.shotstackRenderId,
             "shotstackUrl": self.shotstackUrl,
-            "posterUrl": self.posterUrl,
-            "cloudinary_public_id": self.cloudinary_public_id # Включаем в словарь
+            "posterUrl": self.posterUrl
         }
 
 def create_tables():
@@ -150,34 +149,6 @@ def update_task(task, updates):
     finally:
         session.close()
 
-def delete_task(task_id):
-    """
-    Удаляет задачу из базы данных по ее task_id.
-    Args:
-        task_id (str): Уникальный идентификатор задачи.
-    Returns:
-        bool: True, если задача успешно удалена, False в противном случае.
-    Raises:
-        SQLAlchemyError: В случае ошибки базы данных.
-    """
-    session = get_session()
-    try:
-        task = session.query(Task).filter_by(task_id=task_id).first()
-        if task:
-            session.delete(task)
-            session.commit()
-            logger.info(f"Task '{task_id}' successfully deleted from DB.")
-            return True
-        else:
-            logger.warning(f"Task '{task_id}' not found in DB for deletion.")
-            return False
-    except SQLAlchemyError as e:
-        session.rollback()
-        logger.error(f"Error deleting task '{task_id}' from DB: {e}", exc_info=True)
-        raise
-    finally:
-        session.close()
-
 def get_user_videos(instagram_username=None, email=None, linkedin_profile=None):
     """
     Получает список видео для пользователя по одному из идентификаторов (логика ИЛИ).
@@ -223,4 +194,3 @@ def get_user_videos(instagram_username=None, email=None, linkedin_profile=None):
 
 # Создание таблиц при импорте модуля
 create_tables()
-
