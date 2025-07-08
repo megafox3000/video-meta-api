@@ -33,6 +33,8 @@ Session = sessionmaker(bind=engine)
 # --- Helper Function ---
 def to_camel_case(snake_str):
     """Converts a snake_case string to camelCase."""
+    if not isinstance(snake_str, str):
+        return snake_str
     components = snake_str.split('_')
     # Return the first component lowercase and all subsequent components capitalized.
     return components[0] + ''.join(x.title() for x in components[1:])
@@ -119,24 +121,28 @@ def add_task(task_data):
         session.add(new_task)
         session.flush()  # Flush to get the new object with its ID before commit
         logger.info(f"Task '{new_task.task_id}' added to DB.")
+        # CHANGED: Always return a dictionary to prevent DetachedInstanceError
         return new_task.to_dict()
 
 def get_task_by_id(task_id_str):
     """
-    Retrieves a single task by its string-based task_id.
+    Retrieves a single task as a dictionary by its string-based task_id.
 
     Args:
         task_id_str (str): The unique task identifier string.
     
     Returns:
-        Task or None: The SQLAlchemy Task object if found, otherwise None.
+        dict or None: A camelCase dictionary of the Task if found, otherwise None.
     """
     with session_scope() as session:
-        return session.query(Task).filter_by(task_id=task_id_str).first()
+        task = session.query(Task).filter_by(task_id=task_id_str).first()
+        # CHANGED: Return a dictionary or None to prevent DetachedInstanceError
+        return task.to_dict() if task else None
 
 def get_task_by_public_id(public_id):
     """
-    Retrieves a single task by its Cloudinary public_id.
+    Retrieves a single task object by its Cloudinary public_id.
+    NOTE: This returns the raw object because it's used internally by other backend services.
 
     Args:
         public_id (str): The Cloudinary public_id.
@@ -165,6 +171,7 @@ def update_task_by_id(task_id_str, updates):
                 setattr(task, key, value)
             logger.info(f"Task '{task.task_id}' updated in DB.")
             session.flush()
+            # CHANGED: Return the updated dictionary
             return task.to_dict()
         return None
 
@@ -211,12 +218,13 @@ def get_user_videos(instagram_username=None, email=None, linkedin_profile=None):
             return []
 
         tasks = session.query(Task).filter(or_(*conditions)).order_by(Task.timestamp.desc()).all()
+        # CHANGED: Return a list of dictionaries to prevent DetachedInstanceError
         return [task.to_dict() for task in tasks]
 
 def create_tables():
     """
     Creates all database tables defined in the Base metadata if they don't already exist.
-    This function should be called once at application startup.
+    This function should be called once at application startup from app.py.
     """
     try:
         Base.metadata.create_all(engine)
