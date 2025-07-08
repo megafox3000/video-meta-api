@@ -1,3 +1,4 @@
+# db_service.py
 import os
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, JSON, or_, Index
 from sqlalchemy.orm import sessionmaker, declarative_base
@@ -8,12 +9,11 @@ from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
-# --- Конфигурация базы данных ---
+# --- Конфигурация ---
 DATABASE_URL = os.environ.get('DATABASE_URL')
 if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL environment variable is not set!")
+    raise RuntimeError("DATABASE_URL is not set!")
 
-# Настройка SSL для облачных баз данных PostgreSQL
 engine_args = {}
 if DATABASE_URL.startswith("postgresql") and "sslmode=" not in DATABASE_URL:
     engine_args['connect_args'] = {'sslmode': 'require'}
@@ -22,17 +22,18 @@ engine = create_engine(DATABASE_URL, **engine_args)
 Base = declarative_base()
 Session = sessionmaker(bind=engine)
 
+# --- Вспомогательная функция ---
+def to_camel_case(snake_str):
+    """Конвертирует строку из snake_case в camelCase."""
+    components = snake_str.split('_')
+    return components[0] + ''.join(x.title() for x in components[1:])
 
 # --- Модель данных ---
 class Task(Base):
     __tablename__ = 'tasks'
-
     id = Column(Integer, primary_key=True)
     task_id = Column(String, unique=True, nullable=False, index=True)
-    
-    # ИЗМЕНЕНИЕ: Добавлено поле для public_id из Cloudinary с индексацией
     cloudinary_public_id = Column(String, unique=True, index=True)
-    
     instagram_username = Column(String, index=True)
     email = Column(String, index=True)
     linkedin_profile = Column(String)
@@ -42,21 +43,22 @@ class Task(Base):
     video_metadata = Column(JSON)
     message = Column(Text)
     timestamp = Column(DateTime, default=datetime.utcnow)
-    shotstackRenderId = Column(String)
-    shotstackUrl = Column(String)
-    posterUrl = Column(String)
-
-    def __repr__(self):
-        return f"<Task(id={self.id}, task_id='{self.task_id}', status='{self.status}')>"
+    shotstackRenderId = Column(String) # Это уже camelCase, конвертер его не тронет
+    shotstackUrl = Column(String)      # И это тоже
+    posterUrl = Column(String)         # И это
 
     def to_dict(self):
-        return {c.name: getattr(self, c.name) for c in self.__table__.columns}
+        """Автоматически создает словарь и конвертирует ключи в camelCase."""
+        snake_case_dict = {c.name: getattr(self, c.name) for c in self.__table__.columns}
+        
+        if isinstance(snake_case_dict.get('timestamp'), datetime):
+            snake_case_dict['timestamp'] = snake_case_dict['timestamp'].isoformat()
+            
+        return {to_camel_case(key): value for key, value in snake_case_dict.items()}
 
-
-# --- ИСПРАВЛЕНИЕ: Контекстный менеджер для управления сессиями ---
+# --- Контекстный менеджер сессий ---
 @contextmanager
 def session_scope():
-    """Обеспечивает транзакционный скоуп для серий операций с БД."""
     session = Session()
     try:
         yield session
@@ -68,51 +70,10 @@ def session_scope():
     finally:
         session.close()
 
-
-# --- Функции для работы с БД (переписаны с session_scope) ---
-
-def add_task(task_data):
-    """Добавляет новую задачу в базу данных."""
-    with session_scope() as session:
-        new_task = Task(**task_data)
-        session.add(new_task)
-        session.flush() # Применяем изменения, чтобы получить объект с ID
-        logger.info(f"Task '{new_task.task_id}' added to DB.")
-        return new_task
-
-def get_task_by_id(task_id_str):
-    """Получает задачу по ее строковому task_id."""
-    with session_scope() as session:
-        return session.query(Task).filter_by(task_id=task_id_str).first()
-
-def get_task_by_public_id(public_id):
-    """НОВАЯ ФУНКЦИЯ: Получает задачу по ее Cloudinary public_id."""
-    with session_scope() as session:
-        return session.query(Task).filter_by(cloudinary_public_id=public_id).first()
-
-def update_task_by_id(task_id_str, updates):
-    """Обновляет существующую задачу по ее строковому task_id."""
-    with session_scope() as session:
-        task = session.query(Task).filter_by(task_id=task_id_str).first()
-        if task:
-            for key, value in updates.items():
-                setattr(task, key, value)
-            logger.info(f"Task '{task.task_id}' updated in DB.")
-            return task
-        return None
-
-def delete_task_by_id(task_primary_key):
-    """НОВАЯ ФУНКЦИЯ: Удаляет задачу по ее первичному ключу (Integer id)."""
-    with session_scope() as session:
-        task = session.query(Task).filter_by(id=task_primary_key).first()
-        if task:
-            logger.warning(f"Deleting task ID {task.id} ('{task.task_id}') from DB.")
-            session.delete(task)
-            return True
-        return False
+# --- Функции для работы с БД ---
 
 def get_user_videos(instagram_username=None, email=None, linkedin_profile=None):
-    """Получает список видео для пользователя."""
+    """Получает список видео для пользователя в виде словарей."""
     with session_scope() as session:
         conditions = []
         if instagram_username:
@@ -126,16 +87,27 @@ def get_user_videos(instagram_username=None, email=None, linkedin_profile=None):
             return []
 
         tasks = session.query(Task).filter(or_(*conditions)).order_by(Task.timestamp.desc()).all()
-        return tasks
+        # ИСПРАВЛЕНИЕ: Возвращаем список словарей
+        return [task.to_dict() for task in tasks]
 
+# ... (Остальные ваши функции, например, add_task, update_task, теперь тоже должны возвращать task.to_dict() или ничего) ...
+
+def get_task_by_public_id(public_id):
+    """Находит задачу по public_id."""
+    with session_scope() as session:
+        task = session.query(Task).filter_by(cloudinary_public_id=public_id).first()
+        return task # Возвращаем объект, так как он используется только внутри бэкенда
+
+def delete_task_by_id(task_primary_key):
+    """Удаляет задачу по ее первичному ключу (Integer id)."""
+    with session_scope() as session:
+        task = session.query(Task).get(task_primary_key)
+        if task:
+            session.delete(task)
+            return True
+        return False
+        
 def create_tables():
-    """Создает таблицы в базе данных, если они еще не существуют."""
-    try:
-        Base.metadata.create_all(engine)
-        logger.info("Database tables checked/created successfully.")
-    except Exception as e:
-        logger.error(f"Error creating database tables: {e}", exc_info=True)
-        raise
+    Base.metadata.create_all(engine)
 
-# Создание таблиц при первом импорте модуля
 create_tables()
