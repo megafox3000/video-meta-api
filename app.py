@@ -1,7 +1,9 @@
+# app.py
 import os
 import cloudinary
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+import db_service
 from datetime import datetime
 import hashlib
 import time
@@ -28,6 +30,9 @@ CORS(app, resources={r"/*": {"origins": [
     "http://127.0.0.1:5500"
 ], "methods": ["GET", "POST", "OPTIONS", "HEAD"], "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"]}}, supports_credentials=True)
 
+# ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ ПРИ СТАРТЕ ПРИЛОЖЕНИЯ
+with app.app_context():
+    db_service.create_tables()
 
 # Конфигурация Cloudinary
 cloudinary.config(
