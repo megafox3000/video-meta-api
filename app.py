@@ -510,38 +510,53 @@ def get_heavy_tasks():
     logger.info("[HEAVY_TASKS] Request for heavy tasks received.")
     return jsonify({"message": "No heavy tasks pending for local worker yet."}), 200
 
-# --- NEW: Endpoint to fetch user videos by identifier ---
 @app.route('/user-videos', methods=['GET'])
 def get_user_videos():
+    # Получаем идентификаторы из запроса
+    instagram_username = request.args.get('instagram_username')
+    email = request.args.get('email')
+    linkedin_profile = request.args.get('linkedin_profile')
+
+    if not any([instagram_username, email, linkedin_profile]):
+        return jsonify({"error": "Please provide an identifier"}), 400
+
     try:
-        instagram_username = request.args.get('instagram_username')
-        email = request.args.get('email')
-        linkedin_profile = request.args.get('linkedin_profile')
-
-        logger.info(f"[USER_VIDEOS] Request received for: Instagram='{instagram_username}', Email='{email}', LinkedIn='{linkedin_profile}'")
-
-        if not any([instagram_username, email, linkedin_profile]):
-            logger.warning("[USER_VIDEOS] No identifier provided for fetching user videos.")
-            return jsonify({"error": "Please provide an Instagram username, email, or LinkedIn profile to fetch videos."}), 400
-
-        tasks = db_service.get_user_videos(
+        # 1. Получаем ВСЕ задачи из нашей БД для этого пользователя
+        tasks_from_db = db_service.get_user_videos(
             instagram_username=instagram_username,
             email=email,
             linkedin_profile=linkedin_profile
         )
 
-        if not tasks:
-            logger.info(f"[USER_VIDEOS] No videos found for provided identifiers.")
-            return jsonify([]), 200
+        verified_tasks = []
+        tasks_to_delete_ids = []
 
-        video_list = [task.to_dict() for task in tasks]
-        logger.info(f"[USER_VIDEOS] Found {len(video_list)} videos for provided identifiers.")
-        return jsonify(video_list), 200
+        # 2. Проверяем каждую задачу
+        for task in tasks_from_db:
+            # Проверяем существование видео в Cloudinary по его public_id
+            video_exists = cloudinary_service.check_video_existence(task.cloudinary_public_id)
+
+            if video_exists:
+                # Если видео существует, добавляем его в список для отправки на фронтенд
+                verified_tasks.append(task.to_dict())
+            else:
+                # Если видео НЕ существует, помечаем его на удаление из нашей БД
+                logger.warning(f"Видео для задачи {task.task_id} не найдено в Cloudinary. Помечаем на удаление из БД.")
+                tasks_to_delete_ids.append(task.id)
+
+        # 3. Удаляем "мертвые" записи из нашей БД
+        if tasks_to_delete_ids:
+            logger.info(f"Удаление {len(tasks_to_delete_ids)} несуществующих записей из БД...")
+            for task_id in tasks_to_delete_ids:
+                db_service.delete_task_by_id(task_id) # Используем ID первичного ключа
+
+        # 4. Возвращаем фронтенду только проверенный, "чистый" список видео
+        return jsonify(verified_tasks), 200
 
     except Exception as e:
-        logger.exception(f"[USER_VIDEOS] An unexpected error occurred fetching user videos:")
-        return jsonify({"error": "An unexpected server error occurred", "details": str(e)}), 500
-
+        logger.error(f"[USER_VIDEOS] Ошибка при получении и проверке видео: {e}", exc_info=True)
+        return jsonify({"error": "An unexpected server error occurred"}), 500
+        
 if __name__ == '__main__':
     from waitress import serve
     port = int(os.environ.get('PORT', 8080))
